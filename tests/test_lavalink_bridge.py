@@ -894,6 +894,47 @@ async def test_websocket_closed_non_4014_does_not_touch_queue() -> None:
         audio_cache.set_audio_cache(None)
 
 
+async def test_guild_leave_releases_queued_pins_then_destroys_player() -> None:
+    """Bot kicked / leaving a guild must release queued pins before destroy.
+
+    Sibling of issue #24 (PR #28): without releasing first, queued tracks
+    that never fire ``TrackEndEvent`` keep their pins forever — a noisy
+    guild that kicks the bot would leak the entire queue.
+    """
+    from ryzic import audio_cache
+
+    destroy_calls: list[int] = []
+    queued_player = _QueuePlayer(
+        queue=[
+            _IdTrack(identifier="/var/cache/ryzic/audio/gl/glleave1.audio"),
+            _IdTrack(identifier="/var/cache/ryzic/audio/gl/glleave2.audio"),
+        ]
+    )
+
+    class _PlayerManager:
+        def get(self, guild_id: int) -> _QueuePlayer | None:
+            return queued_player if guild_id == 111 else None
+
+        async def destroy(self, guild_id: int) -> None:
+            destroy_calls.append(guild_id)
+
+    class _Client:
+        def __init__(self) -> None:
+            self.player_manager = _PlayerManager()
+
+    fake = RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, _Client()))
+    try:
+        await lavalink_glue._on_guild_leave(_make_guild_leave_event(111))
+        assert sorted(fake.released) == ["glleave1", "glleave2"]
+        assert queued_player.queue == []
+        # Existing teardown must still run so the player_manager entry goes away.
+        assert destroy_calls == [111]
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
 async def test_node_disconnected_releases_queued_pins_for_every_player() -> None:
     """All player queues get their pins released when the node drops."""
     from ryzic import audio_cache
