@@ -49,6 +49,11 @@ select = [
     "RUF",  # ruff-specific
 ]
 
+[tool.ruff.lint.isort]
+# The `lavalink/` directory at the repo root (Lavalink server config) collides
+# with isort's same-package detection of the `lavalink` PyPI dependency.
+known-third-party = ["lavalink"]
+
 [tool.ty.environment]
 root = ["./src"]
 

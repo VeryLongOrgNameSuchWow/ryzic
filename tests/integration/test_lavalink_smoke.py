@@ -18,10 +18,9 @@ import shutil
 from pathlib import Path
 
 import pytest
+from lavalink import Client, LoadType
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
-
-from lavalink import Client, LoadType
 
 pytestmark = pytest.mark.integration
 
