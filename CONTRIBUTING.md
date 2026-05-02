@@ -4,10 +4,10 @@ Thanks for taking the time. This file documents the workflow we expect for chang
 
 ## Commits
 
-ryzic uses [Conventional Commits](https://www.conventionalcommits.org/). The commit type drives the version bump that [release-please](https://github.com/googleapis/release-please) cuts. Pre-1.0, the mapping is intentionally conservative — see [SEMVER.md](SEMVER.md) for rationale:
+ryzic uses [Conventional Commits](https://www.conventionalcommits.org/). The commit type drives the version bump that [release-please](https://github.com/googleapis/release-please) cuts. See [SEMVER.md](SEMVER.md) for the pre-1.0 caveats:
 
 - `fix:` → patch release.
-- `feat:` → patch release pre-1.0, minor release post-1.0.
+- `feat:` → minor release.
 - `feat!:` (or any commit with a `BREAKING CHANGE:` footer) → minor release pre-1.0, major release post-1.0.
 - `chore:`, `docs:`, `test:`, `refactor:`, `ci:` → no release.
 
@@ -29,7 +29,11 @@ Before-merge gates (run as separate review passes on substantial PRs):
 
 ## Where the design lives
 
-The M1 plan and per-PR review notes live under [docs/plans/](docs/plans/). `M1.md` is the source of truth for behavior, env vars, and module layout; the `PR{n}-review.md` / `PR{n}-security-review.md` / `PR{n}-simplify.md` files capture review output for each implementation PR. Reference them when proposing follow-ups so reviewers have context.
+The M1 plan and the pre-implementation plan reviews live under [docs/plans/](docs/plans/). `M1.md` is the source of truth for behavior, env vars, and module layout; `M1-review.md` and `M1-simplify.md` capture the pre-implementation correctness/security/UX critique and KISS pass.
+
+Per-PR review output (`/review`, `/security-review`, `/simplify`) is posted as PR comments on the GitHub PR — not committed to the repo. Reference the merged PR for any context on the review verdicts behind a given change.
+
+Forward-looking planning lives in GitHub Issues. See [#13](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/13) (M1 epic) and [#8](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/8) (M2 epic).
 
 ## What we won't merge
 
