@@ -1,8 +1,19 @@
 name: release-please
 
+# Watches conventional-commit messages on `main` and opens (or updates) a
+# release PR that bumps `[project].version` in `pyproject.toml` and prepends
+# an entry to `CHANGELOG.md`. Merging the release PR triggers
+# release-please-action to create the corresponding `vX.Y.Z` tag and GitHub
+# Release; that tag then fires `release.yml` which builds and pushes a Docker
+# image to GHCR.
+#
+# The cut is hands-off as long as conventional commits are clean. See
+# `RELEASING.md` for the full flow + the bump table.
+
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,8 +23,20 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v5
+      # Mint an installation token from the vlonsw-release-please GitHub App
+      # (App ID + private key in repo secrets) instead of falling through to
+      # the workflow's default GITHUB_TOKEN. Tags and PRs created via
+      # GITHUB_TOKEN do not fire downstream workflows — that's GitHub's
+      # anti-loop rule — which would mean release-please's tag push silently
+      # skips `release.yml` (GHCR publish + GitHub Release). An App token has
+      # no such restriction, so the cut becomes fully hands-off.
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349  # v2.2.2
+        id: app-token
         with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          token: ${{ secrets.GITHUB_TOKEN }}
