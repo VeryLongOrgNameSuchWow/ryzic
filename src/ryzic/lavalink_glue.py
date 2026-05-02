@@ -481,6 +481,9 @@ async def _on_guild_leave(event: hikari.GuildLeaveEvent) -> None:
     client = _ll_client
     if client is not None:
         try:
+            player = cast(lavalink.DefaultPlayer | None, client.player_manager.get(guild_id))
+            if player is not None:
+                await clear_queue_releasing(player)
             await client.player_manager.destroy(guild_id)
         except Exception:
             _log.exception("guild=%d failed to destroy player on guild-leave", guild_id)
