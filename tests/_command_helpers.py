@@ -104,6 +104,22 @@ class FakeAudioTrack:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+class RecordingCache:
+    """Captures ``release`` calls so tests can assert pin release on queue clear.
+
+    Used by tests that exercise ``lavalink_glue.clear_queue_releasing`` and
+    its callers (``/leave``, voice 4014 disconnect, node disconnect) — the
+    real :class:`~ryzic.audio_cache.AudioCache` is sqlite-backed and
+    overkill for assertions about the release walk's contract.
+    """
+
+    def __init__(self) -> None:
+        self.released: list[str] = []
+
+    async def release(self, video_id: str) -> None:
+        self.released.append(video_id)
+
+
 class FakePlayer:
     def __init__(self, guild_id: int) -> None:
         self.guild_id = guild_id

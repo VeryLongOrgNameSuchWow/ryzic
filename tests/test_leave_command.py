@@ -13,20 +13,11 @@ from tests._command_helpers import (
     FakeAudioTrack,
     FakeBot,
     FakeLavalinkClient,
+    RecordingCache,
     both_in_voice,
     context_for,
     install_lavalink_client,
 )
-
-
-class _RecordingCache:
-    """Captures release() calls so tests can assert pin release on queue clear."""
-
-    def __init__(self) -> None:
-        self.released: list[str] = []
-
-    async def release(self, video_id: str) -> None:
-        self.released.append(video_id)
 
 
 @pytest.fixture(autouse=True)
@@ -117,7 +108,7 @@ async def test_leave_releases_audio_cache_pins_for_queued_tracks() -> None:
     ``audio_cache._in_use`` forever, permanently disabling LRU eviction
     for those files.
     """
-    fake_cache = _RecordingCache()
+    fake_cache = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake_cache))
     bot = both_in_voice()
     ctx = context_for(bot)

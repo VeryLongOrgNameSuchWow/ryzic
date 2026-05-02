@@ -19,6 +19,7 @@ import lavalink
 import pytest
 
 from ryzic import lavalink_glue
+from tests._command_helpers import RecordingCache
 
 
 @dataclass
@@ -575,16 +576,6 @@ def test_is_valid_discord_endpoint_allowlist() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _RecordingCache:
-    """Captures release() calls so tests can assert the integration."""
-
-    def __init__(self) -> None:
-        self.released: list[str] = []
-
-    async def release(self, video_id: str) -> None:
-        self.released.append(video_id)
-
-
 @dataclass
 class _IdTrack:
     title: str = "song"
@@ -621,7 +612,7 @@ async def test_track_end_releases_audio_cache_pin() -> None:
     """
     from ryzic import audio_cache
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         bot = _FakeApp()
@@ -642,7 +633,7 @@ async def test_track_exception_also_releases_audio_cache_pin() -> None:
     """LOAD_FAILED still has to release; otherwise the file pins forever."""
     from ryzic import audio_cache
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         bot = _FakeApp()
@@ -736,11 +727,16 @@ class _QueuePlayer:
     queue: list[_IdTrack] = field(default_factory=list)
 
 
-async def test_clear_queue_releasing_releases_each_track_then_clears() -> None:
-    """The helper drops a pin per queued track before emptying the queue."""
+async def test_clear_queue_releasing_clears_then_releases_each_track() -> None:
+    """The helper empties the queue first, then drops a pin per snapshotted track.
+
+    Clear-then-release closes the race window where a concurrent ``/play``
+    (i.e. ``player.queue.add``) lands between release ``await`` boundaries
+    on the snapshot — see ``test_clear_queue_releasing_does_not_drop_concurrently_added_track``.
+    """
     from ryzic import audio_cache
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         player = _QueuePlayer(
@@ -756,11 +752,59 @@ async def test_clear_queue_releasing_releases_each_track_then_clears() -> None:
         audio_cache.set_audio_cache(None)
 
 
+async def test_clear_queue_releasing_does_not_drop_concurrently_added_track() -> None:
+    """Regression: a track ``/play`` adds during the release loop must survive.
+
+    The previous shape (release-then-clear) walked the live queue and
+    only emptied it after the last release ``await``. A concurrent
+    ``player.queue.add()`` that landed between those awaits was wiped
+    by the trailing ``queue.clear()`` without ever being released —
+    the new pin leaked. Clear-then-release on a snapshot leaves any
+    concurrently-added track in place.
+    """
+    from ryzic import audio_cache
+
+    racing_track = _IdTrack(identifier="/var/cache/ryzic/audio/zz/zzracing.audio")
+
+    class _AddOnReleaseCache:
+        """Simulates ``/play`` queuing a new track while a release is in-flight."""
+
+        def __init__(self, player: _QueuePlayer) -> None:
+            self.player = player
+            self.released: list[str] = []
+            self._fired = False
+
+        async def release(self, video_id: str) -> None:
+            self.released.append(video_id)
+            if not self._fired:
+                self._fired = True
+                # Mid-release: the racing producer's queue.add lands here.
+                self.player.queue.append(racing_track)
+
+    player = _QueuePlayer(
+        queue=[
+            _IdTrack(identifier="/var/cache/ryzic/audio/aa/aaaaaaaa.audio"),
+            _IdTrack(identifier="/var/cache/ryzic/audio/bb/bbbbbbbb.audio"),
+        ]
+    )
+    fake = _AddOnReleaseCache(player)
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        await lavalink_glue.clear_queue_releasing(cast(lavalink.DefaultPlayer, player))
+        # Both original tracks released exactly once (snapshot, not live).
+        assert sorted(fake.released) == ["aaaaaaaa", "bbbbbbbb"]
+        # The racing track survived the clear and was NOT released
+        # (it would have been a permanent pin leak under the old shape).
+        assert player.queue == [racing_track]
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
 async def test_clear_queue_releasing_handles_empty_queue() -> None:
     """No tracks → no releases, queue stays empty, no exception."""
     from ryzic import audio_cache
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         player = _QueuePlayer(queue=[])
@@ -775,7 +819,7 @@ async def test_clear_queue_releasing_skips_tracks_without_identifier() -> None:
     """Defensive: tracks with no identifier are dropped without releasing."""
     from ryzic import audio_cache
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         player = _QueuePlayer(
@@ -806,7 +850,7 @@ async def test_websocket_closed_4014_releases_queued_pins() -> None:
         reason: str = "Disconnected"
         by_remote: bool = True
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         bot = _FakeApp()
@@ -834,7 +878,7 @@ async def test_websocket_closed_non_4014_does_not_touch_queue() -> None:
         reason: str = "Abnormal Closure"
         by_remote: bool = True
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         bot = _FakeApp()
@@ -875,7 +919,7 @@ async def test_node_disconnected_releases_queued_pins_for_every_player() -> None
         def __init__(self, players: list[_QueuePlayer]) -> None:
             self.player_manager = _PlayerManager(players)
 
-    fake = _RecordingCache()
+    fake = RecordingCache()
     audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
     try:
         bot = _FakeApp()

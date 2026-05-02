@@ -223,10 +223,18 @@ async def clear_queue_releasing(player: lavalink.DefaultPlayer) -> None:
     leave their pins held forever. Centralising the release walk here
     keeps the three callers (``/leave``, voice 4014 disconnect, node
     disconnect) honest about the contract.
+
+    Snapshot the queue and clear it BEFORE awaiting any release: a
+    concurrent ``/play`` (or other ``player.queue.add`` caller) that
+    lands between ``await`` boundaries on the snapshot would otherwise
+    have its newly-queued track silently wiped by the trailing
+    ``queue.clear()``, leaking its pin. Clear-then-release leaves a
+    fresh queue for any racing producer.
     """
-    for track in player.queue:
-        await _release_track(track)
+    tracks = list(player.queue)
     player.queue.clear()
+    for track in tracks:
+        await _release_track(track)
 
 
 def _safe_error_text(text: str | None) -> str:
