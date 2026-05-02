@@ -1,4 +1,4 @@
-"""Smoke tests: package imports and trivial helpers behave."""
+"""Smoke tests: package imports, config validation, secret-safe repr."""
 
 from __future__ import annotations
 
@@ -12,22 +12,6 @@ def test_package_modules_import() -> None:
     assert hasattr(config, "load")
     assert errors.FetchFailed.__mro__[1] is Exception
     assert errors.InvalidVideoID.__mro__[1] is Exception
-
-
-def test_format_uptime_under_minute() -> None:
-    assert bot._format_uptime(7) == "7s"
-
-
-def test_format_uptime_minutes_seconds() -> None:
-    assert bot._format_uptime(192) == "3m 12s"
-
-
-def test_format_uptime_hours() -> None:
-    assert bot._format_uptime(3_725) == "1h 2m 5s"
-
-
-def test_format_uptime_days() -> None:
-    assert bot._format_uptime(2 * 86_400 + 3_600 + 60 + 1) == "2d 1h 1m 1s"
 
 
 def test_config_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,3 +59,33 @@ def test_config_rejects_bad_int(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LAVALINK_PORT", "not-a-number")
     with pytest.raises(config.ConfigError, match="LAVALINK_PORT"):
         config.load()
+
+
+def test_config_rejects_zero_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PORT", "0")
+    with pytest.raises(config.ConfigError, match="LAVALINK_PORT"):
+        config.load()
+
+
+def test_config_rejects_negative_cache_max(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("RYZIC_CACHE_MAX_GB", "-1")
+    with pytest.raises(config.ConfigError, match="RYZIC_CACHE_MAX_GB"):
+        config.load()
+
+
+def test_config_rejects_unknown_log_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("RYZIC_LOG_LEVEL", "VERBOSE")
+    with pytest.raises(config.ConfigError, match="RYZIC_LOG_LEVEL"):
+        config.load()
+
+
+def test_config_repr_hides_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "secret-bot-token-xyz")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "secret-lavalink-pwd-xyz")
+    cfg = config.load()
+    rendered = repr(cfg)
+    assert "secret-bot-token-xyz" not in rendered
+    assert "secret-lavalink-pwd-xyz" not in rendered
