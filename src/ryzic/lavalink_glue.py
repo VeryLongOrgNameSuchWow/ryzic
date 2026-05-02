@@ -488,7 +488,8 @@ def _build_lavalink_client(
         password=cfg.lavalink_password,
         region="us",
         # The explicit name keeps host:port out of the default
-        # f"{region}-{host}:{port}" — /lltest surfaces node.name to invokers.
+        # f"{region}-{host}:{port}" so log lines (which include node.name)
+        # don't leak the address to anyone reading the bot's stdout.
         name="ryzic-default",
     )
     client.add_event_hooks(EventHandler(bot))
