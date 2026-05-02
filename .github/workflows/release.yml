@@ -2,10 +2,8 @@ name: Release
 
 # Builds and publishes a Docker image to GHCR on every `vX.Y.Z` tag.
 #
-# The tag is created by release-please-action when the release PR merges
-# (see `release-please.yml`). The release-please workflow uses an App token
-# specifically so its tag push fires this workflow — `GITHUB_TOKEN`-created
-# tags would silently skip it (GitHub anti-loop rule).
+# The tag that triggers this workflow is created by release-please via a
+# GitHub App token (see release-please.yml for why GITHUB_TOKEN won't work).
 #
 # Manual dispatch is the escape hatch when a tag was created some other way
 # (manual `git tag`, recovery flow). Run from the GitHub Actions UI or:
@@ -23,7 +21,6 @@ on:
 permissions:
   contents: write
   packages: write
-  id-token: write
 
 jobs:
   release:
@@ -31,11 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          # On `push: tags`, github.ref is the tag and the default checkout
-          # is fine. On `workflow_dispatch`, github.ref is the dispatching
-          # branch — pivot to the input tag so the build matches the right
-          # version.
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag || github.ref }}  # input tag on dispatch, pushed tag on push
 
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
 
@@ -45,15 +38,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Generates the `:vX.Y.Z`, `:vX.Y`, and `:latest` tags from the git tag.
+      # Generates the `:vX.Y.Z` and `:vX.Y` tags from the resolved tag, plus
+      # `:latest` only on `push` (so a workflow_dispatch rebuild of an old tag
+      # cannot move `:latest` backward). `value=` overrides the default semver
+      # source (github.ref), which on workflow_dispatch is the dispatching
+      # branch — not the input tag.
       - id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf  # v6.0.0
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ github.event.inputs.tag || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.inputs.tag || github.ref_name }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
 
       - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
         with:
