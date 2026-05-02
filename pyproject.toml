@@ -59,7 +59,11 @@ quote-style = "double"
 known-third-party = ["lavalink"]
 
 [tool.ty.environment]
-root = ["./src"]
+# ``./src`` is where the ``ryzic`` package lives; ``./`` exposes the
+# top-level ``tests`` package so cross-test helpers
+# (``tests/_command_helpers.py``) resolve under the same import path
+# pytest uses (``from tests._command_helpers import ...``).
+root = ["./src", "./"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

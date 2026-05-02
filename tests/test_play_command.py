@@ -157,6 +157,7 @@ class _FakeAudioTrack:
     identifier: str = "abc123"
     duration: int = 213_000
     uri: str = "https://example.com/x"
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

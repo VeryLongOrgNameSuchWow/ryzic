@@ -236,6 +236,7 @@ async def _play_single(
 
     was_playing = player.is_playing
     queue_len_before = len(player.queue)
+    ux.attach_track_info(audio_track, track_info)
     player.add(track=audio_track, requester=ctx.user.id)
     if not was_playing:
         await player.play()
@@ -309,6 +310,7 @@ async def _play_playlist(
         return
 
     was_playing = player.is_playing
+    ux.attach_track_info(first_audio_track, info.entries[first_index])
     player.add(track=first_audio_track, requester=ctx.user.id)
     if not was_playing:
         await player.play()
@@ -318,6 +320,7 @@ async def _play_playlist(
         audio_track = await _load_one(cache, ll_client, entry)
         if audio_track is None:
             continue
+        ux.attach_track_info(audio_track, entry)
         player.add(track=audio_track, requester=ctx.user.id)
         enqueued += 1
 

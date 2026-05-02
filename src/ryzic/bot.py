@@ -75,7 +75,14 @@ def main() -> None:
         cache = await _bootstrap_audio_cache(cfg)
         # Extensions register commands; commands are synced inside
         # ``client.start``, so load before starting.
-        await client.load_extensions("ryzic.commands.lltest", "ryzic.commands.play")
+        await client.load_extensions(
+            "ryzic.commands.play",
+            "ryzic.commands.skip",
+            "ryzic.commands.queue",
+            "ryzic.commands.pause",
+            "ryzic.commands.resume",
+            "ryzic.commands.leave",
+        )
         await client.start()
 
     async def _on_stopping(_: hikari.StoppingEvent) -> None:
