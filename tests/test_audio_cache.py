@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -25,11 +25,7 @@ from ryzic.audio_cache import AudioCache, sweep_orphans
 from ryzic.errors import FetchFailed, InvalidVideoID
 from ryzic.ytdlp import TrackInfo
 
-# Magic bytes the cache's ``_detect_ext`` recognizes — used by the fake
-# downloader so the test cache produces realistic per-codec layouts.
-_M4A_HEAD = b"\x00\x00\x00\x18ftypM4A "
-_OPUS_HEAD = b"OggSOpusHead-padding"
-_WEBM_HEAD = b"\x1a\x45\xdf\xa3\x9fB\x86\x81"
+_DEFAULT_PAYLOAD = b"audio-bytes-stand-in" * 4
 
 
 def _track(video_id: str = "dQw4w9WgXcQ", **overrides: Any) -> TrackInfo:
@@ -44,22 +40,36 @@ def _track(video_id: str = "dQw4w9WgXcQ", **overrides: Any) -> TrackInfo:
     return TrackInfo(**base)
 
 
-def _fake_download(payload: bytes = _M4A_HEAD * 8) -> Callable[..., Any]:
-    """Return an async stub mimicking :func:`ryzic.ytdlp.download`.
-
-    Writes ``payload`` to ``dest`` so ``_detect_ext`` and the size
-    measurement run against real bytes.
-    """
+def _patch_download(payload: bytes = _DEFAULT_PAYLOAD) -> Any:
+    """Patch :func:`ryzic.audio_cache.download` with a stub writing ``payload``."""
 
     async def _impl(url: str, dest: Path, *, cache_root: Path) -> None:
         dest.write_bytes(payload)
 
-    return _impl
+    return patch.object(audio_cache, "download", side_effect=_impl)
 
 
-def _patch_download(payload: bytes = _M4A_HEAD * 8) -> Any:
-    """Patch :func:`ryzic.audio_cache.download` with a fake writing ``payload``."""
-    return patch.object(audio_cache, "download", side_effect=_fake_download(payload))
+async def _add_track(
+    cache: AudioCache,
+    track: TrackInfo,
+    *,
+    payload_bytes: int = 1000,
+    advance_seconds: float = 0,
+) -> Path:
+    """Add ``track`` to ``cache`` with a deterministic payload + optional clock skip.
+
+    Used by eviction tests to create entries with distinct ``last_used_ts``
+    values without sleeping.
+    """
+    with (
+        patch("ryzic.audio_cache.time.time", return_value=time.time() + advance_seconds),
+        _patch_download(_bytes_payload(payload_bytes)),
+    ):
+        return await cache.get_or_download(track)
+
+
+def _bytes_payload(n_bytes: int) -> bytes:
+    return b"\x00" * n_bytes
 
 
 async def _read_one(
@@ -154,7 +164,13 @@ async def test_get_or_download_miss_writes_file_and_row(cache: AudioCache) -> No
         "SELECT title, uploader, duration_ms, bytes, ext FROM entries WHERE video_id = ?",
         (track.video_id,),
     )
-    assert row == ("Never Gonna Give You Up", "Rick Astley", 213_000, len(_M4A_HEAD * 8), "m4a")
+    assert row == (
+        "Never Gonna Give You Up",
+        "Rick Astley",
+        213_000,
+        len(_DEFAULT_PAYLOAD),
+        "audio",
+    )
 
 
 async def test_get_or_download_hit_skips_download(cache: AudioCache) -> None:
@@ -230,7 +246,7 @@ async def test_concurrent_get_or_download_triggers_one_download(cache: AudioCach
         call_count += 1
         download_started.set()
         await release_download.wait()
-        dest.write_bytes(_M4A_HEAD * 8)
+        dest.write_bytes(_DEFAULT_PAYLOAD)
 
     with patch.object(audio_cache, "download", side_effect=slow_download):
         # Three concurrent /play calls for the same URL.
@@ -319,32 +335,9 @@ async def test_release_idempotent_after_zero(cache: AudioCache) -> None:
     await cache.release("dQw4w9WgXcQ")
 
 
-async def test_release_many_decrements_each(cache: AudioCache) -> None:
-    a = _track("aaaaaaaaaaa")
-    b = _track("bbbbbbbbbbb")
-    c = _track("ccccccccccc")
-    with _patch_download():
-        await cache.get_or_download(a)
-        await cache.get_or_download(b)
-        await cache.get_or_download(b)
-        await cache.get_or_download(c)
-    # a:1, b:2, c:1
-    await cache.release_many([a.video_id, b.video_id, c.video_id])
-    # a:0(removed), b:1, c:0(removed)
-    assert a.video_id not in cache._in_use
-    assert cache._in_use[b.video_id] == 1
-    assert c.video_id not in cache._in_use
-
-
 # ---------------------------------------------------------------------------
 # LRU eviction (acceptance §11.4)
 # ---------------------------------------------------------------------------
-
-
-def _bytes_payload(n_bytes: int) -> bytes:
-    # Real m4a-ish header so _detect_ext picks "m4a"; padded to size.
-    head = _M4A_HEAD
-    return head + (b"\x00" * max(0, n_bytes - len(head)))
 
 
 async def test_eviction_removes_oldest_first(tmp_path: Path) -> None:
@@ -355,22 +348,13 @@ async def test_eviction_removes_oldest_first(tmp_path: Path) -> None:
         b = _track("bbbbbbbbbbb")
         c = _track("ccccccccccc")
 
-        with _patch_download(_bytes_payload(1000)):
-            path_a = await cache.get_or_download(a)
-            await cache.release(a.video_id)
+        path_a = await _add_track(cache, a)
+        await cache.release(a.video_id)
         # Slight time gap so a is unambiguously older than b.
-        with (
-            patch("ryzic.audio_cache.time.time", return_value=time.time() + 10),
-            _patch_download(_bytes_payload(1000)),
-        ):
-            path_b = await cache.get_or_download(b)
-            await cache.release(b.video_id)
+        path_b = await _add_track(cache, b, advance_seconds=10)
+        await cache.release(b.video_id)
         # Inserting c (1KB) pushes total to 3KB > 2.5KB cap → evict a.
-        with (
-            patch("ryzic.audio_cache.time.time", return_value=time.time() + 20),
-            _patch_download(_bytes_payload(1000)),
-        ):
-            path_c = await cache.get_or_download(c)
+        path_c = await _add_track(cache, c, advance_seconds=20)
 
         assert not path_a.exists()
         assert path_b.exists()
@@ -391,22 +375,14 @@ async def test_eviction_skips_in_use_entries(tmp_path: Path) -> None:
         a = _track("aaaaaaaaaaa")
         b = _track("bbbbbbbbbbb")
         c = _track("ccccccccccc")
-        with _patch_download(_bytes_payload(1000)):
-            path_a = await cache.get_or_download(a)
+
+        path_a = await _add_track(cache, a)
         # NOTE: do not release a — it is "actively playing".
-        with (
-            patch("ryzic.audio_cache.time.time", return_value=time.time() + 10),
-            _patch_download(_bytes_payload(1000)),
-        ):
-            path_b = await cache.get_or_download(b)
-            await cache.release(b.video_id)
+        path_b = await _add_track(cache, b, advance_seconds=10)
+        await cache.release(b.video_id)
         # Adding c forces an eviction. a is the LRU oldest but pinned;
         # evictor must skip it and remove b instead.
-        with (
-            patch("ryzic.audio_cache.time.time", return_value=time.time() + 20),
-            _patch_download(_bytes_payload(1000)),
-        ):
-            path_c = await cache.get_or_download(c)
+        path_c = await _add_track(cache, c, advance_seconds=20)
 
         assert path_a.exists()  # pinned, survived
         assert not path_b.exists()  # evicted in a's place
@@ -435,6 +411,57 @@ async def test_just_inserted_file_not_evicted_due_to_pin(tmp_path: Path) -> None
         await cache.close()
 
 
+async def test_fast_path_pins_before_touch_yields(tmp_path: Path) -> None:
+    """Regression for review MEDIUM-1: the fast-path hit must pin BEFORE awaiting
+    ``_touch``. Otherwise a concurrent ``_evict_to_fit`` interleaving on the yield
+    can delete a file the fast-path just confirmed.
+
+    Strategy: prime an entry, release it (so it is unpinned), then mock ``_touch``
+    to block on a barrier. While ``_touch`` is suspended, kick off another
+    ``get_or_download`` for a different vid with a tiny cap so the evictor runs.
+    The original vid must NOT be evicted because ``_finalize_hit`` pinned it
+    sync-before yielding.
+    """
+    cache = AudioCache(tmp_path, max_bytes=2_500)
+    await cache.open()
+    try:
+        a = _track("aaaaaaaaaaa")
+        b = _track("bbbbbbbbbbb")
+
+        # Prime a, then release so it is unpinned and a candidate for eviction.
+        path_a = await _add_track(cache, a, payload_bytes=1500)
+        await cache.release(a.video_id)
+        assert a.video_id not in cache._in_use
+
+        touch_blocked = asyncio.Event()
+        release_touch = asyncio.Event()
+        original_touch = cache._touch
+
+        async def slow_touch(video_id: str) -> None:
+            touch_blocked.set()
+            await release_touch.wait()
+            await original_touch(video_id)
+
+        # Fast-path hit on a; touch yields; meanwhile a download for b
+        # forces eviction. Pinning must already have happened.
+        with patch.object(cache, "_touch", side_effect=slow_touch):
+            hit_task = asyncio.create_task(cache.get_or_download(a))
+            await touch_blocked.wait()
+            # _touch is suspended. If pinning happens AFTER _touch, a's
+            # _in_use is still 0 and the eviction below would delete it.
+            assert cache._in_use[a.video_id] == 1
+            # Trigger eviction via b (advance_seconds keeps b's last_used_ts
+            # newer; a is the LRU candidate).
+            await _add_track(cache, b, payload_bytes=1500, advance_seconds=10)
+            release_touch.set()
+            result = await hit_task
+
+        assert result == path_a
+        assert path_a.exists()
+    finally:
+        await cache.close()
+
+
 async def test_eviction_unlink_failure_does_not_drop_row(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -443,9 +470,8 @@ async def test_eviction_unlink_failure_does_not_drop_row(
     try:
         a = _track("aaaaaaaaaaa")
         b = _track("bbbbbbbbbbb")
-        with _patch_download(_bytes_payload(1000)):
-            await cache.get_or_download(a)
-            await cache.release(a.video_id)
+        await _add_track(cache, a, payload_bytes=1000)
+        await cache.release(a.video_id)
         # Patch unlink to fail when the evictor tries to remove a's
         # file. The row must stay so we can retry — silent drop would
         # corrupt the index.
@@ -459,9 +485,8 @@ async def test_eviction_unlink_failure_does_not_drop_row(
         with (
             caplog.at_level("WARNING"),
             patch.object(Path, "unlink", flaky_unlink),
-            _patch_download(_bytes_payload(1000)),
         ):
-            await cache.get_or_download(b)
+            await _add_track(cache, b, payload_bytes=1000, advance_seconds=10)
 
         row = await _read_one(
             cache.cache_root / "index.sqlite",
@@ -490,45 +515,29 @@ def test_audio_path_rejects_traversal_via_symlink(tmp_path: Path) -> None:
     (cache_root / "audio").mkdir()
     (cache_root / "audio" / "dQ").symlink_to(elsewhere)
     with pytest.raises(InvalidVideoID, match="escapes cache_root"):
-        audio_cache._audio_path(cache_root, "dQw4w9WgXcQ", "m4a")
+        audio_cache._audio_path(cache_root, "dQw4w9WgXcQ", "audio")
 
 
 def test_audio_path_validates_video_id_first(tmp_path: Path) -> None:
     with pytest.raises(InvalidVideoID):
-        audio_cache._audio_path(tmp_path, "../../etc/passwd", "m4a")
+        audio_cache._audio_path(tmp_path, "../../etc/passwd", "audio")
 
 
 def test_audio_path_layout(tmp_path: Path) -> None:
-    p = audio_cache._audio_path(tmp_path, "dQw4w9WgXcQ", "m4a")
-    assert p == tmp_path / "audio" / "dQ" / "dQw4w9WgXcQ.m4a"
+    p = audio_cache._audio_path(tmp_path, "dQw4w9WgXcQ", "audio")
+    assert p == tmp_path / "audio" / "dQ" / "dQw4w9WgXcQ.audio"
 
 
-# ---------------------------------------------------------------------------
-# _detect_ext
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("payload", "expected"),
-    [
-        (_M4A_HEAD * 2, "m4a"),
-        (_OPUS_HEAD, "opus"),
-        (_WEBM_HEAD * 2, "webm"),
-        (b"ID3" + b"\x00" * 20, "mp3"),
-        (b"\xff\xf1" + b"\x00" * 20, "mp3"),  # AAC ADTS / MPEG sync also matches.
-        (b"junk garbage nothing", "audio"),
-        (b"", "audio"),
-    ],
-)
-def test_detect_ext_recognizes_known_codecs(tmp_path: Path, payload: bytes, expected: str) -> None:
-    p = tmp_path / "sample"
-    p.write_bytes(payload)
-    assert audio_cache._detect_ext(p) == expected
-
-
-def test_detect_ext_handles_unreadable_file(tmp_path: Path) -> None:
-    # Path that does not exist → OSError → fallback ext.
-    assert audio_cache._detect_ext(tmp_path / "does-not-exist") == "audio"
+async def test_open_rejects_symlink_cache_root(tmp_path: Path) -> None:
+    # Defense-in-depth: a symlink AT cache_root would land all writes
+    # at the symlink target (security review LOW-6).
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real_dir)
+    cache = AudioCache(link, max_bytes=10_000)
+    with pytest.raises(RuntimeError, match="symlink"):
+        await cache.open()
 
 
 # ---------------------------------------------------------------------------
@@ -552,16 +561,16 @@ async def test_sweep_orphans_deletes_old_unreferenced_files(tmp_path: Path) -> N
         await cache.close()
 
     # Untracked old file → deleted.
-    old_orphan = tmp_path / "audio" / "zz" / "zzzzzzzzzzz.m4a"
+    old_orphan = tmp_path / "audio" / "zz" / "zzzzzzzzzzz.audio"
     old_orphan.parent.mkdir(parents=True, exist_ok=True)
-    old_orphan.write_bytes(_M4A_HEAD)
+    old_orphan.write_bytes(_DEFAULT_PAYLOAD)
     old_mtime = time.time() - audio_cache._ORPHAN_MIN_AGE_S - 100
     os.utime(old_orphan, (old_mtime, old_mtime))
 
     # Untracked young file → preserved (avoids racing concurrent download).
-    young_orphan = tmp_path / "audio" / "yy" / "yyyyyyyyyyy.m4a"
+    young_orphan = tmp_path / "audio" / "yy" / "yyyyyyyyyyy.audio"
     young_orphan.parent.mkdir(parents=True, exist_ok=True)
-    young_orphan.write_bytes(_M4A_HEAD)
+    young_orphan.write_bytes(_DEFAULT_PAYLOAD)
 
     deleted = await sweep_orphans(tmp_path)
     assert deleted == 1
@@ -575,10 +584,10 @@ async def test_sweep_orphans_works_with_no_db(tmp_path: Path) -> None:
     # files still survive on age guard.
     audio_dir = tmp_path / "audio" / "ab"
     audio_dir.mkdir(parents=True)
-    young = audio_dir / "abcdefghijk.m4a"
-    young.write_bytes(_M4A_HEAD)
-    old = audio_dir / "lmnopqrstuv.m4a"
-    old.write_bytes(_M4A_HEAD)
+    young = audio_dir / "abcdefghijk.audio"
+    young.write_bytes(_DEFAULT_PAYLOAD)
+    old = audio_dir / "lmnopqrstuv.audio"
+    old.write_bytes(_DEFAULT_PAYLOAD)
     old_mtime = time.time() - audio_cache._ORPHAN_MIN_AGE_S - 100
     os.utime(old, (old_mtime, old_mtime))
 
@@ -592,3 +601,44 @@ async def test_sweep_orphans_skips_directories(tmp_path: Path) -> None:
     (tmp_path / "audio" / "ab").mkdir(parents=True)
     assert await sweep_orphans(tmp_path) == 0
     assert (tmp_path / "audio" / "ab").is_dir()
+
+
+async def test_sweep_orphans_reaps_old_tmp_files(tmp_path: Path) -> None:
+    # Crashed downloads leave .partial files in tmp/; sweep must reap
+    # them once they age past the download window (security LOW-7).
+    tmp_dir = tmp_path / "tmp"
+    tmp_dir.mkdir()
+    old_partial = tmp_dir / "aaaaaaaaaaa.partial"
+    old_partial.write_bytes(b"partial-bytes")
+    old_mtime = time.time() - audio_cache._ORPHAN_MIN_AGE_S - 100
+    os.utime(old_partial, (old_mtime, old_mtime))
+
+    young_partial = tmp_dir / "bbbbbbbbbbb.partial"
+    young_partial.write_bytes(b"partial-bytes")
+
+    assert await sweep_orphans(tmp_path) == 1
+    assert not old_partial.exists()
+    assert young_partial.exists()
+
+
+async def test_download_refreshes_mtime_after_replace(tmp_path: Path) -> None:
+    # Security LOW-3: ``os.replace`` preserves the source mtime, so a
+    # slow download whose tmp file is already >1h old would land in
+    # audio/ with that old mtime — a sweep racing the INSERT could
+    # reap it. The fix refreshes mtime via ``os.utime``.
+    cache = AudioCache(tmp_path, max_bytes=10_000)
+    await cache.open()
+    try:
+        track = _track()
+        old_mtime = time.time() - audio_cache._ORPHAN_MIN_AGE_S - 100
+
+        async def slow_download(url: str, dest: Path, *, cache_root: Path) -> None:
+            dest.write_bytes(_DEFAULT_PAYLOAD)
+            os.utime(dest, (old_mtime, old_mtime))
+
+        with patch.object(audio_cache, "download", side_effect=slow_download):
+            path = await cache.get_or_download(track)
+
+        assert path.stat().st_mtime > old_mtime + 100
+    finally:
+        await cache.close()

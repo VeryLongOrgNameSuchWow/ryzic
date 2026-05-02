@@ -19,7 +19,6 @@ import logging
 import os
 import time
 from collections import Counter
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Final
 
@@ -38,13 +37,15 @@ _TMP_SUBDIR: Final = "tmp"
 # progress — orphan sweep skips them to dodge the insert/move race.
 _ORPHAN_MIN_AGE_S: Final = 3600
 
-# Default extension when content-sniffing finds nothing recognizable.
 # Lavalink's ``LocalAudioSourceManager`` sniffs the file body, so the
-# on-disk suffix is decorative; we still want a consistent value for
-# the sqlite ``ext`` column and easier debugging.
-_FALLBACK_EXT: Final = "audio"
+# on-disk suffix is decorative — we use a single constant rather than
+# magic-byte detection (yt-dlp doesn't surface ext through PR3a's API,
+# and the sniff added complexity without a downstream consumer).
+_AUDIO_EXT: Final = "audio"
 
 _SCHEMA: Final = """
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS entries (
   video_id TEXT PRIMARY KEY,
   rel_path TEXT NOT NULL,
@@ -58,30 +59,6 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS entries_lru ON entries(last_used_ts);
 """
-
-
-def _detect_ext(path: Path) -> str:
-    """Return the storage extension for ``path`` based on a tiny magic-byte sniff.
-
-    The format selector in :mod:`ryzic.ytdlp` prefers m4a → opus →
-    webm → bestaudio. Detecting the actual container lets the on-disk
-    layout match the codec for debugging without relying on yt-dlp
-    surfacing the ext through PR3a's narrow API.
-    """
-    try:
-        with path.open("rb") as fh:
-            head = fh.read(16)
-    except OSError:
-        return _FALLBACK_EXT
-    if len(head) >= 8 and head[4:8] == b"ftyp":
-        return "m4a"
-    if head.startswith(b"OggS"):
-        return "opus"
-    if head.startswith(b"\x1a\x45\xdf\xa3"):
-        return "webm"
-    if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
-        return "mp3"
-    return _FALLBACK_EXT
 
 
 def _audio_path(cache_root: Path, video_id: str, ext: str) -> Path:
@@ -131,13 +108,21 @@ class AudioCache:
 
     async def open(self) -> None:
         """Initialize directories, sqlite connection, and schema."""
+        # Reject a symlink AT cache_root: the in-cache ``relative_to``
+        # check defends paths *inside* the cache, but if the root itself
+        # is attacker-planted the bot's writes land at the symlink
+        # target. Co-resident threat model; cheap defense-in-depth.
+        if self._cache_root.exists() and self._cache_root.is_symlink():
+            raise RuntimeError(f"cache_root {self._cache_root!s} must not be a symlink")
         for d in (self._cache_root, self._audio_root, self._tmp_root):
             d.mkdir(parents=True, exist_ok=True)
+        if not self._cache_root.is_dir():
+            raise RuntimeError(f"cache_root {self._cache_root!s} is not a directory")
         self._conn = await aiosqlite.connect(self._db_path)
-        # WAL keeps readers (LRU touches, eviction scans) from blocking
-        # writers (inserts) under concurrent ``/play`` load — review §4.
-        await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._conn.execute("PRAGMA synchronous=NORMAL")
+        # WAL+NORMAL keep readers (LRU touches, eviction scans) from
+        # blocking writers (inserts) under concurrent ``/play`` load —
+        # review §4. PRAGMAs live in ``_SCHEMA`` so one ``executescript``
+        # puts the database into the desired startup state.
         await self._conn.executescript(_SCHEMA)
         await self._conn.commit()
         _log.info("audio cache opened: root=%s max_bytes=%d", self._cache_root, self._max_bytes)
@@ -155,18 +140,15 @@ class AudioCache:
     async def get_or_download(self, track: TrackInfo) -> Path:
         """Return the cached file path for ``track``, downloading if missing.
 
-        Pins the entry via ``_in_use[video_id] += 1`` BEFORE returning
-        — caller MUST :meth:`release` exactly once per call (including
-        on Lavalink load failure) or eviction will be permanently
-        skipped for that file.
+        Caller MUST :meth:`release` exactly once per call (including on
+        Lavalink load failure) or eviction will be permanently skipped
+        for that file.
         """
         validate_video_id(track.video_id)
 
         hit = await self._fast_lookup(track.video_id)
         if hit is not None:
-            await self._touch(track.video_id)
-            self._in_use[track.video_id] += 1
-            return hit
+            return await self._finalize_hit(track.video_id, hit)
 
         lock = self._locks.setdefault(track.video_id, asyncio.Lock())
         async with lock:
@@ -174,10 +156,21 @@ class AudioCache:
             # finished the download while we waited on the lock.
             hit = await self._fast_lookup(track.video_id)
             if hit is not None:
-                await self._touch(track.video_id)
-                self._in_use[track.video_id] += 1
-                return hit
+                return await self._finalize_hit(track.video_id, hit)
             return await self._download_locked(track)
+
+    async def _finalize_hit(self, video_id: str, path: Path) -> Path:
+        """On a confirmed cache hit: pin BEFORE touch, then return.
+
+        ``_in_use[vid] += 1`` is sync (cannot yield); ``_touch`` is an
+        ``await`` that yields the loop. Pinning first prevents a
+        concurrent eviction running between ``_fast_lookup`` and the
+        pin from deleting our file (symmetric to the slow-path race
+        fix in ``_download_locked``; review §4).
+        """
+        self._in_use[video_id] += 1
+        await self._touch(video_id)
+        return path
 
     async def _download_locked(self, track: TrackInfo) -> Path:
         tmp_path = self._tmp_root / f"{track.video_id}.partial"
@@ -190,12 +183,13 @@ class AudioCache:
         if not tmp_path.exists():
             raise FetchFailed(f"download finished but {tmp_path!s} is missing")
 
-        ext = _detect_ext(tmp_path)
-        final = _audio_path(self._cache_root, track.video_id, ext)
+        final = _audio_path(self._cache_root, track.video_id, _AUDIO_EXT)
         final.parent.mkdir(parents=True, exist_ok=True)
-        # ``os.replace`` is atomic on the same filesystem — readers
-        # never see a partial file at ``final``.
-        os.replace(tmp_path, final)
+        os.replace(tmp_path, final)  # atomic on the same FS — no partial reads
+        # ``os.replace`` preserves the source mtime; refresh it so the
+        # orphan sweep's ``mtime > 1h`` guard cannot delete a slow
+        # download that just landed (security review LOW-3).
+        os.utime(final, None)
 
         size = final.stat().st_size
         rel_path = str(final.relative_to(self._cache_root))
@@ -209,7 +203,7 @@ class AudioCache:
             (
                 track.video_id,
                 rel_path,
-                ext,
+                _AUDIO_EXT,
                 size,
                 track.title,
                 track.uploader,
@@ -243,15 +237,6 @@ class AudioCache:
         self._in_use[video_id] -= 1
         if self._in_use[video_id] <= 0:
             del self._in_use[video_id]
-
-    async def release_many(self, video_ids: Iterable[str]) -> None:
-        """Drop one reference per id — for ``WebSocketClosedEvent`` / ``QueueEndEvent``.
-
-        Caller (PR5/PR6a) iterates the guild's queue once and passes
-        every video_id; the cache stays guild-agnostic.
-        """
-        for vid in video_ids:
-            await self.release(vid)
 
     async def _fast_lookup(self, video_id: str) -> Path | None:
         """Return the on-disk path if a usable entry exists, else None.
@@ -307,29 +292,32 @@ class AudioCache:
                 _log.warning("eviction failed to unlink %s", file_path, exc_info=True)
                 continue
             await conn.execute("DELETE FROM entries WHERE video_id = ?", (video_id,))
+            # Commit per iteration so a crash mid-loop cannot leave
+            # files unlinked but DELETEs un-flushed (those rolled-back
+            # rows would inflate SUM in the next eviction's capacity
+            # check). Cheap under WAL+NORMAL.
+            await conn.commit()
             total -= int(size)
-        await conn.commit()
 
 
 async def sweep_orphans(cache_root: Path) -> int:
-    """Delete tracked-but-unreferenced audio files older than 1h.
+    """Delete tracked-but-unreferenced audio files and stale tmp files older than 1h.
 
-    Walks the ``audio/`` tree and unlinks any file whose ``video_id``
-    has no row in the index AND whose ``mtime`` is older than
-    :data:`_ORPHAN_MIN_AGE_S` — the age guard avoids racing with a
-    concurrent download that has not yet inserted its row (review
-    §4). Returns the count deleted, primarily for tests.
+    Walks ``audio/`` and unlinks any file whose ``video_id`` has no
+    row in the index AND whose ``mtime`` is older than
+    :data:`_ORPHAN_MIN_AGE_S`; also walks ``tmp/`` to reap partial
+    files left by crashed downloads. The age guard avoids racing with
+    a concurrent download that has not yet inserted its row (review
+    §4). Returns the count deleted.
     """
     audio_root = cache_root / _AUDIO_SUBDIR
-    if not audio_root.exists():
-        return 0
+    tmp_root = cache_root / _TMP_SUBDIR
 
     db_path = cache_root / _DB_FILENAME
     tracked: set[str] = set()
     if db_path.exists():
-        # Open a separate short-lived connection: the sweep is invoked
-        # at startup independently of :class:`AudioCache`, and SQLite
-        # WAL allows concurrent readers without contention.
+        # Sweep runs at startup independently of any AudioCache instance;
+        # open our own short-lived connection.
         conn = await aiosqlite.connect(db_path)
         try:
             async with conn.execute("SELECT video_id FROM entries") as cur:
@@ -340,23 +328,37 @@ async def sweep_orphans(cache_root: Path) -> int:
 
     cutoff = time.time() - _ORPHAN_MIN_AGE_S
     deleted = 0
-    for file_path in audio_root.rglob("*"):
-        if not file_path.is_file():
-            continue
-        video_id = file_path.stem
-        if video_id in tracked:
-            continue
-        try:
-            mtime = file_path.stat().st_mtime
-        except OSError:
-            continue
-        if mtime > cutoff:
-            continue
-        try:
-            file_path.unlink()
-            deleted += 1
-        except OSError:
-            _log.warning("orphan sweep failed to unlink %s", file_path, exc_info=True)
+
+    if audio_root.exists():
+        for file_path in audio_root.rglob("*"):
+            if not file_path.is_file():
+                continue
+            video_id = file_path.stem
+            if video_id in tracked:
+                continue
+            if file_path.stat().st_mtime > cutoff:
+                continue
+            try:
+                file_path.unlink()
+                deleted += 1
+            except OSError:
+                _log.warning("orphan sweep failed to unlink %s", file_path, exc_info=True)
+
+    # Tmp files belong to no one once they age past the download
+    # window — partial files from crashed downloads accumulate here
+    # otherwise (security review LOW-7).
+    if tmp_root.exists():
+        for file_path in tmp_root.iterdir():
+            if not file_path.is_file():
+                continue
+            if file_path.stat().st_mtime > cutoff:
+                continue
+            try:
+                file_path.unlink()
+                deleted += 1
+            except OSError:
+                _log.warning("orphan sweep failed to unlink %s", file_path, exc_info=True)
+
     if deleted:
-        _log.info("orphan sweep removed %d files under %s", deleted, audio_root)
+        _log.info("orphan sweep removed %d files under %s", deleted, cache_root)
     return deleted
