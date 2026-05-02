@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
 
-from ryzic import lavalink_glue
+from ryzic import audio_cache, lavalink_glue
 from ryzic.commands import leave as leave_module
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeBot,
     FakeLavalinkClient,
+    RecordingCache,
     both_in_voice,
     context_for,
     install_lavalink_client,
@@ -19,9 +21,12 @@ from tests._command_helpers import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_state() -> None:
+def _reset_state() -> Iterator[None]:
     lavalink_glue._reset_state_for_test()
     install_lavalink_client(None)
+    audio_cache.set_audio_cache(None)
+    yield
+    audio_cache.set_audio_cache(None)
 
 
 async def test_voice_precondition_short_circuits() -> None:
@@ -93,6 +98,40 @@ async def test_leave_stops_clears_disconnects_and_responds() -> None:
     fake = cast(Any, ctx)
     assert fake.responses[0][0] == "Left voice channel. Queue cleared."
     assert "ephemeral" not in fake.responses[0][1]
+
+
+async def test_leave_releases_audio_cache_pins_for_queued_tracks() -> None:
+    """Issue #24: queued-but-never-played tracks must release their cache pins.
+
+    ``TrackEndEvent`` fires only for the currently-playing track on
+    ``player.stop()``; queued tracks would otherwise sit in
+    ``audio_cache._in_use`` forever, permanently disabling LRU eviction
+    for those files.
+    """
+    fake_cache = RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake_cache))
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = FakeAudioTrack(
+        title="Now Playing",
+        identifier="/var/cache/ryzic/audio/np/nowplay1.audio",
+    )
+    player.queue = [
+        FakeAudioTrack(title="A", identifier="/var/cache/ryzic/audio/qa/queueda1.audio"),
+        FakeAudioTrack(title="B", identifier="/var/cache/ryzic/audio/qb/queuedb2.audio"),
+    ]
+
+    await leave_module._handle_leave(ctx)
+
+    assert player.queue == []
+    # Both queued tracks released; the currently-playing track is released
+    # by the TrackEndEvent path (a different code path; see _release_track
+    # in lavalink_glue), not by clear_queue_releasing.
+    assert sorted(fake_cache.released) == ["queueda1", "queuedb2"]
 
 
 def test_leave_loader_registered() -> None:
