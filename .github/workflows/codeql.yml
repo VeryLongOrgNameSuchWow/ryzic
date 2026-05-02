@@ -4,6 +4,11 @@ name: CodeQL
 # weekly on a schedule so we still scan in quiet weeks. Findings show up in
 # the Security tab and block PRs that introduce new issues (configurable in
 # repo settings).
+#
+# Code scanning requires GitHub Advanced Security, which is free on public repos
+# but paid on private. The job below is gated on `repository.visibility == 'public'`
+# so it skips cleanly while the repo is private and starts running automatically
+# the moment the visibility flips.
 
 on:
   push:
@@ -28,6 +33,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    if: ${{ github.event.repository.visibility == 'public' }}
     strategy:
       fail-fast: false
       matrix:

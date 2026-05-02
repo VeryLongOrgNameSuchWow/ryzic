@@ -66,10 +66,10 @@ root = ["./src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 # Integration tests (Docker required) are opt-in: `pytest -m integration` to run them,
-# `pytest -q` (the default in CI's fast lane) skips them. `--cov-fail-under` is
-# the regression gate — drop only if a deliberate refactor moves coverage and
-# you've explicitly chosen the new floor.
-addopts = "-m 'not integration' --cov=src/ryzic --cov-report=term-missing --cov-fail-under=80"
+# `pytest -q` (the default in CI's fast lane) skips them. The `--cov-fail-under`
+# regression gate lives in `.github/workflows/ci.yml` on the unit step so it
+# doesn't fail the integration job, which only exercises ~25% of the package.
+addopts = "-m 'not integration' --cov=src/ryzic --cov-report=term-missing"
 markers = [
     "integration: tests that spin up real services (Docker required)",
 ]

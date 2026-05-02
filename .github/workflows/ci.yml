@@ -42,7 +42,7 @@ jobs:
         run: uv run ty check
 
       - name: Pytest (unit)
-        run: uv run pytest -q
+        run: uv run pytest -q --cov-fail-under=80
 
   integration:
     runs-on: ubuntu-latest
