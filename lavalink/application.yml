@@ -1,0 +1,48 @@
+server:
+  port: 2333
+  address: 0.0.0.0
+
+lavalink:
+  plugins:
+    # Bundled YouTube source is deprecated in Lavalink v4 — use the dedicated plugin.
+    # https://github.com/lavalink-devs/youtube-source
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.0"
+      snapshot: false
+  pluginsDir: "/opt/Lavalink/plugins"
+  server:
+    # Sourced from compose.yaml (LAVALINK_PASSWORD -> LAVALINK_SERVER_PASSWORD).
+    # No literal default: a non-compose deployment must supply it explicitly.
+    password: "${LAVALINK_SERVER_PASSWORD}"
+    sources:
+      youtube: false  # plugin replaces it
+      local: true
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    opusEncodingQuality: 10
+    resamplingQuality: LOW
+    trackStuckThresholdMs: 10000
+    useSeekGhosting: true
+    playerUpdateInterval: 5
+    youtubeSearchEnabled: false
+    soundcloudSearchEnabled: false
+    gc-warnings: true
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: false
+    allowDirectVideoIds: false
+    allowDirectPlaylistIds: false
+
+logging:
+  file:
+    path: ./logs/
+  level:
+    root: INFO
+    lavalink: INFO
+  request:
+    enabled: false
+  logback:
+    rollingpolicy:
+      max-file-size: 100MB
+      max-history: 7

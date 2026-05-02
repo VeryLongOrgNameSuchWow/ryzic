@@ -1,0 +1,35 @@
+services:
+  ryzic:
+    build: .
+    depends_on:
+      lavalink:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      LAVALINK_HOST: lavalink
+      LAVALINK_PORT: "2333"
+      RYZIC_CACHE_DIR: /var/cache/ryzic
+    volumes:
+      - cache:/var/cache/ryzic
+    restart: unless-stopped
+
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4.2.2
+    environment:
+      _JAVA_OPTIONS: "-Xmx512m"
+      SERVER_PORT: "2333"
+      LAVALINK_SERVER_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
+    volumes:
+      - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
+      - lavalink_plugins:/opt/Lavalink/plugins
+      - cache:/var/cache/ryzic:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2333/version"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  cache:
+  lavalink_plugins:

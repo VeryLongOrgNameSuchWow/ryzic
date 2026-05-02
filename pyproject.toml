@@ -29,6 +29,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "ruff>=0.15.12",
+    "testcontainers>=4.14.2",
     "ty>=0.0.34",
 ]
 
@@ -48,9 +49,20 @@ select = [
     "RUF",  # ruff-specific
 ]
 
+[tool.ruff.lint.isort]
+# The `lavalink/` directory at the repo root (Lavalink server config) collides
+# with isort's same-package detection of the `lavalink` PyPI dependency.
+known-third-party = ["lavalink"]
+
 [tool.ty.environment]
 root = ["./src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Integration tests (Docker required) are opt-in: `pytest -m integration` to run them,
+# `pytest -q` (the default in CI's fast lane) skips them.
+addopts = "-m 'not integration'"
+markers = [
+    "integration: tests that spin up real services (Docker required)",
+]

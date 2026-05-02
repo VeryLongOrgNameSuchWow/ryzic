@@ -1,0 +1,52 @@
+.git
+.github
+.gitignore
+.gitattributes
+.dockerignore
+.python-version
+.venv
+.cache
+.env
+.env.*
+!.env.example
+.claude
+.idea
+.vscode
+
+# Python build artefacts
+__pycache__
+*.py[oc]
+build
+dist
+wheels
+*.egg-info
+
+# Local sqlite scratch
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Tests + docs aren't needed in the runtime image. README.md is intentionally
+# kept — pyproject.toml references it and uv build reads it during sync.
+tests
+docs
+
+# Compose stack and lavalink config aren't part of the bot image
+compose.yaml
+docker-compose.yaml
+docker-compose.yml
+lavalink
+
+# Editor + OS noise
+*.swp
+.DS_Store
+
+# Generic credential patterns (defense-in-depth — never expected, never wanted)
+*.pem
+*.key
+*.crt
+id_rsa*
+id_ed25519*
+secrets/
+credentials.json
