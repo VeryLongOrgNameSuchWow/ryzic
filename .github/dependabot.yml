@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - python
+    # yt-dlp ships frequent releases tracking YouTube changes; weekly bumps
+    # here are the intended cadence rather than noise.
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+        exclude-patterns:
+          - yt-dlp
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - github-actions

@@ -22,3 +22,12 @@ wheels/
 
 # Claude Code agent worktrees + task state
 .claude/
+
+# Generic credential patterns (defense-in-depth — never expected, never wanted)
+*.pem
+*.key
+*.crt
+id_rsa*
+id_ed25519*
+secrets/
+credentials.json
