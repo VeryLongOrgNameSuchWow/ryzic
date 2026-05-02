@@ -10,15 +10,11 @@ lavalink:
       snapshot: false
   pluginsDir: "/opt/Lavalink/plugins"
   server:
-    password: "${LAVALINK_SERVER_PASSWORD:youshallnotpass}"
+    # Sourced from compose.yaml (LAVALINK_PASSWORD -> LAVALINK_SERVER_PASSWORD).
+    # No literal default: a non-compose deployment must supply it explicitly.
+    password: "${LAVALINK_SERVER_PASSWORD}"
     sources:
-      youtube: false
-      bandcamp: false
-      soundcloud: false
-      twitch: false
-      vimeo: false
-      nico: false
-      http: false
+      youtube: false  # plugin replaces it
       local: true
     bufferDurationMs: 400
     frameBufferDurationMs: 5000
@@ -37,11 +33,6 @@ plugins:
     allowSearch: false
     allowDirectVideoIds: false
     allowDirectPlaylistIds: false
-    clients:
-      - MUSIC
-      - ANDROID_VR
-      - WEB
-      - WEBEMBEDDED
 
 logging:
   file:

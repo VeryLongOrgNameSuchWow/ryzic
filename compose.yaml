@@ -21,7 +21,7 @@ services:
       LAVALINK_SERVER_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
     volumes:
       - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
-      - ./lavalink/plugins:/opt/Lavalink/plugins
+      - lavalink_plugins:/opt/Lavalink/plugins
       - cache:/var/cache/ryzic:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:2333/version"]
@@ -32,3 +32,4 @@ services:
 
 volumes:
   cache:
+  lavalink_plugins:
