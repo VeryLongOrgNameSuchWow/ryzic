@@ -1,0 +1,76 @@
+# Path → label mappings for actions/labeler. Each top-level key is an
+# existing repo label; PRs whose changed files match any glob get that
+# label applied. `sync-labels: true` removes labels that no longer match.
+
+"area:cache":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/ryzic/audio_cache.py"
+          - "src/ryzic/playlist_cache.py"
+          - "tests/test_audio_cache*"
+          - "tests/test_playlist_cache*"
+
+"area:lavalink":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/ryzic/lavalink_glue.py"
+          - "tests/test_lavalink_bridge*"
+
+"area:commands":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/ryzic/commands/**"
+          - "src/ryzic/voice_check.py"
+          - "src/ryzic/ux.py"
+          - "tests/test_play_command*"
+          - "tests/test_skip_command*"
+          - "tests/test_queue_command*"
+          - "tests/test_pause_command*"
+          - "tests/test_resume_command*"
+          - "tests/test_leave_command*"
+          - "tests/test_voice_check*"
+          - "tests/test_ux*"
+
+"area:deploy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Dockerfile"
+          - ".dockerignore"
+          - "compose.yaml"
+          - "lavalink/**"
+          - "tests/integration/**"
+
+"area:tooling":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "pyproject.toml"
+          - "uv.lock"
+          - ".github/workflows/**"
+          - ".github/dependabot.yml"
+          - ".github/labeler.yml"
+          - ".editorconfig"
+
+"area:config":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/ryzic/config.py"
+          - ".env.example"
+          - "release-please-config.json"
+
+"area:tests":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
+
+"area:docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "README.md"
+          - "CONTRIBUTING.md"
+          - "SEMVER.md"
+          - "SECURITY.md"
+          - "RELEASING.md"
+          - "CLAUDE.md"
+          - "docs/**"
+          - ".github/pull_request_template.md"
+          - ".github/ISSUE_TEMPLATE/**"
