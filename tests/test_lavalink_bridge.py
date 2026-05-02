@@ -10,7 +10,7 @@ client is required.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -721,3 +721,185 @@ async def test_release_with_path_identifier_decrements_real_cache_pin(
     finally:
         audio_cache.set_audio_cache(None)
         await cache.close()
+
+
+# ---------------------------------------------------------------------------
+# Queue-clear pin release (issue #24)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _QueuePlayer:
+    """``DefaultPlayer`` stand-in carrying just the surface clear_queue_releasing reads."""
+
+    guild_id: int = 111
+    queue: list[_IdTrack] = field(default_factory=list)
+
+
+async def test_clear_queue_releasing_releases_each_track_then_clears() -> None:
+    """The helper drops a pin per queued track before emptying the queue."""
+    from ryzic import audio_cache
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        player = _QueuePlayer(
+            queue=[
+                _IdTrack(identifier="/var/cache/ryzic/audio/aa/aaaaaaaa.audio"),
+                _IdTrack(identifier="/var/cache/ryzic/audio/bb/bbbbbbbb.audio"),
+            ]
+        )
+        await lavalink_glue.clear_queue_releasing(cast(lavalink.DefaultPlayer, player))
+        assert sorted(fake.released) == ["aaaaaaaa", "bbbbbbbb"]
+        assert player.queue == []
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_clear_queue_releasing_handles_empty_queue() -> None:
+    """No tracks → no releases, queue stays empty, no exception."""
+    from ryzic import audio_cache
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        player = _QueuePlayer(queue=[])
+        await lavalink_glue.clear_queue_releasing(cast(lavalink.DefaultPlayer, player))
+        assert fake.released == []
+        assert player.queue == []
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_clear_queue_releasing_skips_tracks_without_identifier() -> None:
+    """Defensive: tracks with no identifier are dropped without releasing."""
+    from ryzic import audio_cache
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        player = _QueuePlayer(
+            queue=[
+                _IdTrack(identifier=""),
+                _IdTrack(identifier="/var/cache/ryzic/audio/cc/cccccccc.audio"),
+            ]
+        )
+        await lavalink_glue.clear_queue_releasing(cast(lavalink.DefaultPlayer, player))
+        assert fake.released == ["cccccccc"]
+        assert player.queue == []
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_websocket_closed_4014_releases_queued_pins() -> None:
+    """Voice 4014 (kicked / channel deleted) clears the queue without playing it.
+
+    Without the helper those queued tracks would leak their pins forever
+    (issue #24).
+    """
+    from ryzic import audio_cache
+
+    @dataclass
+    class _WsClosedEvent:
+        player: _QueuePlayer
+        code: int = 4014
+        reason: str = "Disconnected"
+        by_remote: bool = True
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        player = _QueuePlayer(
+            queue=[_IdTrack(identifier="/var/cache/ryzic/audio/wc/wsclosed.audio")]
+        )
+        await handler.on_websocket_closed(
+            cast(lavalink.WebSocketClosedEvent, _WsClosedEvent(player=player))
+        )
+        assert fake.released == ["wsclosed"]
+        assert player.queue == []
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_websocket_closed_non_4014_does_not_touch_queue() -> None:
+    """Other close codes are transient; the queue (and pins) must survive."""
+    from ryzic import audio_cache
+
+    @dataclass
+    class _WsClosedEvent:
+        player: _QueuePlayer
+        code: int = 1006  # transient
+        reason: str = "Abnormal Closure"
+        by_remote: bool = True
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        track = _IdTrack(identifier="/var/cache/ryzic/audio/kk/keptkept.audio")
+        player = _QueuePlayer(queue=[track])
+        await handler.on_websocket_closed(
+            cast(lavalink.WebSocketClosedEvent, _WsClosedEvent(player=player))
+        )
+        assert fake.released == []
+        assert player.queue == [track]
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_node_disconnected_releases_queued_pins_for_every_player() -> None:
+    """All player queues get their pins released when the node drops."""
+    from ryzic import audio_cache
+
+    @dataclass
+    class _Node:
+        name: str = "ryzic-default"
+
+    @dataclass
+    class _NodeDisconnectedEvent:
+        node: _Node
+        code: int | None = 1006
+        reason: str | None = "lost"
+
+    class _PlayerManager:
+        def __init__(self, players: list[_QueuePlayer]) -> None:
+            self._players = players
+
+        def values(self) -> list[_QueuePlayer]:
+            return list(self._players)
+
+    class _ClientWithPlayers:
+        def __init__(self, players: list[_QueuePlayer]) -> None:
+            self.player_manager = _PlayerManager(players)
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        players = [
+            _QueuePlayer(
+                guild_id=111,
+                queue=[_IdTrack(identifier="/var/cache/ryzic/audio/g1/guild1aa.audio")],
+            ),
+            _QueuePlayer(
+                guild_id=222,
+                queue=[
+                    _IdTrack(identifier="/var/cache/ryzic/audio/g2/guild2aa.audio"),
+                    _IdTrack(identifier="/var/cache/ryzic/audio/g2/guild2bb.audio"),
+                ],
+            ),
+        ]
+        client = _ClientWithPlayers(players)
+        lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, client))
+
+        handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        await handler.on_node_disconnected(
+            cast(lavalink.NodeDisconnectedEvent, _NodeDisconnectedEvent(node=_Node())),
+        )
+        assert sorted(fake.released) == ["guild1aa", "guild2aa", "guild2bb"]
+        assert all(p.queue == [] for p in players)
+    finally:
+        audio_cache.set_audio_cache(None)

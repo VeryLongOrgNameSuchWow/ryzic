@@ -52,9 +52,10 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
 
     # Stop first so Lavalink halts the stream cleanly; clearing the queue
     # before update_voice_state guarantees a follow-up auto-advance can
-    # not race a disconnect.
+    # not race a disconnect. Use the releasing helper so audio_cache pins
+    # for queued-but-never-played tracks don't leak (issue #24).
     await player.stop()
-    player.queue.clear()
+    await lavalink_glue.clear_queue_releasing(player)
 
     bot = cast(hikari.GatewayBot, ctx.client.app)
     await bot.update_voice_state(guild_id, None)

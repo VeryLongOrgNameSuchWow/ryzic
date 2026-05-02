@@ -215,6 +215,20 @@ async def _release_track(track: lavalink.AudioTrack | None) -> None:
         _log.exception("failed to release audio cache entry %s", video_id)
 
 
+async def clear_queue_releasing(player: lavalink.DefaultPlayer) -> None:
+    """Release audio cache pins for every queued track, then clear the queue.
+
+    ``TrackEndEvent`` fires (and ``_release_track`` runs) only for tracks
+    that actually played; queue-clear paths that drop unplayed tracks
+    leave their pins held forever. Centralising the release walk here
+    keeps the three callers (``/leave``, voice 4014 disconnect, node
+    disconnect) honest about the contract.
+    """
+    for track in player.queue:
+        await _release_track(track)
+    player.queue.clear()
+
+
 def _safe_error_text(text: str | None) -> str:
     """Sanitise server-supplied error text before posting to a public channel.
 
@@ -327,7 +341,7 @@ class EventHandler:
         )
         if event.code != 4014:
             return
-        cast(lavalink.DefaultPlayer, event.player).queue.clear()
+        await clear_queue_releasing(cast(lavalink.DefaultPlayer, event.player))
         _cancel_auto_leave(guild_id)
         _reset_voice_ready(guild_id)
         await _send_to_last_play_channel(
@@ -348,7 +362,7 @@ class EventHandler:
         notified: set[int] = set()
         for player in list(client.player_manager.values()):
             guild_id = player.guild_id
-            cast(lavalink.DefaultPlayer, player).queue.clear()
+            await clear_queue_releasing(cast(lavalink.DefaultPlayer, player))
             _cancel_auto_leave(guild_id)
             _reset_voice_ready(guild_id)
             if guild_id in notified:
