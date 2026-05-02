@@ -18,6 +18,13 @@ instances rather than dict payloads — the caller forwards them to
 :meth:`lightbulb.Context.respond` directly. Strings that don't appear in
 an embed (the one-shot ephemerals like ``"Join a voice channel first."``)
 live at the call site for locality of reference (M1 §3 cross-cutting).
+
+The ``track_info`` accessors (:func:`attach_track_info`, :func:`get_track_info`)
+piggyback the original yt-dlp :class:`TrackInfo` on each :class:`lavalink.AudioTrack`
+via its ``extra`` dict so commands like ``/queue`` and ``/skip`` can render
+the original YouTube URL/title/uploader without re-resolving via yt-dlp.
+Lavalink's local source manager surfaces the file path in ``AudioTrack.uri``,
+which is unhelpful for embeds.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from __future__ import annotations
 from typing import Final
 
 import hikari
+import lavalink
 
 from .ytdlp import PlaylistInfo, TrackInfo
 
@@ -43,6 +51,13 @@ _MARKDOWN_CHARS: Final = ("\\", "[", "]", "(", ")", "*", "_", "~", "`", "|", ">"
 # Single ellipsis char rather than three dots — cheaper byte cost vs the
 # 4096-char ceiling.
 _ELLIPSIS: Final = "…"
+
+# Number of queued entries to enumerate inline in ``/queue``; the rest
+# collapse to a single "… and N more" line per M1 §3.
+_QUEUE_PREVIEW_MAX: Final = 10
+
+# Namespaced ``AudioTrack.extra`` key for the stashed :class:`TrackInfo`.
+_TRACK_INFO_EXTRA_KEY: Final = "ryzic_track_info"
 
 
 def escape_markdown(s: str) -> str:
@@ -167,3 +182,86 @@ def _format_timestamp(unix_seconds: int) -> str:
     a server-side ``strftime`` we'd have to apologise for.
     """
     return f"<t:{unix_seconds}:R>"
+
+
+def attach_track_info(track: lavalink.AudioTrack, info: TrackInfo) -> None:
+    """Stash ``info`` on ``track.extra`` for later embed rendering.
+
+    The local source manager populates ``AudioTrack.title``/``uri`` from
+    the file we hand it (e.g. ``/var/cache/ryzic/audio/.../dQw4w9.audio``)
+    so they are unusable for user-facing display. Callers (``/play``)
+    invoke this immediately before ``player.add`` so every queued
+    track carries its original yt-dlp metadata.
+    """
+    track.extra[_TRACK_INFO_EXTRA_KEY] = info
+
+
+def get_track_info(track: lavalink.AudioTrack) -> TrackInfo | None:
+    """Return the original :class:`TrackInfo` for ``track`` if attached.
+
+    Returns ``None`` when the track was enqueued without metadata
+    (e.g. surfaced by a future code path that bypasses
+    :func:`attach_track_info`); callers must handle the missing case
+    gracefully rather than KeyError.
+    """
+    info = track.extra.get(_TRACK_INFO_EXTRA_KEY)
+    return info if isinstance(info, TrackInfo) else None
+
+
+def build_queue_embed(
+    *,
+    now_playing: TrackInfo,
+    now_playing_position_ms: int,
+    paused: bool,
+    queue: list[tuple[TrackInfo, int]],
+) -> hikari.Embed:
+    """Build the ``/queue`` embed (M1 §3).
+
+    ``queue`` is a list of ``(track_info, requester_id)`` tuples in
+    queue order — the entry at index 0 plays next. The embed enumerates
+    the first :data:`_QUEUE_PREVIEW_MAX` entries inline; anything beyond
+    collapses to ``"… and N more"`` so we never blow the 4096-char
+    description budget on long playlists.
+    """
+    queue_count = len(queue)
+    queue_total_ms = sum(info.duration_ms for info, _ in queue)
+    title = f"Queue ({queue_count} tracks · {format_duration(queue_total_ms)})"
+
+    np_title = safe_truncate(escape_markdown(now_playing.title), EMBED_FIELD_VALUE_MAX // 2)
+    progress = (
+        f"{format_duration(now_playing_position_ms)} / {format_duration(now_playing.duration_ms)}"
+    )
+    if paused:
+        progress = f"{progress} (paused)"
+    now_playing_value = safe_truncate(
+        f"[**{np_title}**]({now_playing.url})\n{progress}",
+        EMBED_FIELD_VALUE_MAX,
+    )
+
+    description = _build_queue_description(queue)
+
+    embed = hikari.Embed(title=title, description=description)
+    embed.add_field(name="Now playing", value=now_playing_value, inline=False)
+    return embed
+
+
+def _build_queue_description(queue: list[tuple[TrackInfo, int]]) -> str:
+    """Format the description body of the ``/queue`` embed.
+
+    Returns the empty string when ``queue`` is empty so the caller's
+    embed has no description (the Now playing field stands alone).
+    """
+    if not queue:
+        return ""
+    preview = queue[:_QUEUE_PREVIEW_MAX]
+    lines = [
+        (
+            f"{idx}. [{escape_markdown(info.title)}]({info.url}) — "
+            f"{format_duration(info.duration_ms)} (req. by <@{requester_id}>)"
+        )
+        for idx, (info, requester_id) in enumerate(preview, start=1)
+    ]
+    overflow = len(queue) - len(preview)
+    if overflow > 0:
+        lines.append(f"… and {overflow} more")
+    return safe_truncate("\n".join(lines), EMBED_DESCRIPTION_MAX)

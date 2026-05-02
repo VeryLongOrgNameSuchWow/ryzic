@@ -4,13 +4,13 @@ ryzic follows [Semantic Versioning 2.0.0](https://semver.org/) with the pre-1.0 
 
 ## Pre-1.0 (`0.x.y`)
 
-While the major version is `0`, **minor bumps may contain breaking changes**. release-please is configured with `bump-minor-pre-major: true` and `bump-patch-for-minor-pre-major: true`, so the pre-1.0 commit-to-bump mapping is intentionally conservative:
+While the major version is `0`, **minor bumps may contain breaking changes**. release-please uses the standard `release-type: python` mapping pre-1.0:
 
 - `fix:` → patch (`0.x.Y+1`)
-- `feat:` → patch (`0.x.Y+1`)
-- `feat!:` / `BREAKING CHANGE:` → minor (`0.MINOR+1.0`) rather than a major bump
+- `feat:` → minor (`0.MINOR+1.0`)
+- `feat!:` / `BREAKING CHANGE:` → minor pre-1.0 rather than a major bump (the major version stays at `0` until the bot is declared stable; the loud "this might break you" signal is the minor bump itself)
 
-Holding `feat:` to a patch keeps `0.x` cheap to iterate on while reserving minor bumps for the loud "this might break you" signal pre-1.0. Post-1.0 the standard SemVer mapping applies (`feat:` → minor, `feat!:` → major).
+Post-1.0, the standard SemVer mapping applies (`feat:` → minor, `feat!:` → major).
 
 If stability matters to you before v1.0, **pin to an exact version** (`ryzic==0.4.2`) and read [CHANGELOG.md](CHANGELOG.md) before upgrading. The CHANGELOG calls out breaking changes with a `BREAKING CHANGE:` footer.
 
