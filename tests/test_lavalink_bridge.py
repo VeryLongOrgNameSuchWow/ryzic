@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import hikari
@@ -193,9 +194,13 @@ async def test_voice_state_listener_tracks_own_user_even_when_client_missing() -
     still has to mark the guild ready, otherwise PR6a's first /play after a
     reconnect will time out.
     """
+    # Park the waiter first; the setter must wake it up even with no
+    # lavalink client installed.
+    wait_task = asyncio.create_task(lavalink_glue.wait_for_voice_ready(111, timeout=1.0))
+    await asyncio.sleep(0)
     event = _make_voice_state_event(user_id=42, bot_user_id=42, channel_id=999)
     await lavalink_glue._on_voice_state_update(event)
-    assert await lavalink_glue.wait_for_voice_ready(111, timeout=0.05) is True
+    assert await wait_task is True
 
 
 async def test_voice_server_listener_forwards_when_client_present() -> None:
@@ -254,12 +259,14 @@ async def test_voice_state_listener_sets_voice_ready_event_for_bot_user() -> Non
     fake_client = _FakeLavalinkClient()
     lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, fake_client))
 
+    # Park the waiter first (mirrors the real flow: ``/play`` calls
+    # ``update_voice_state`` then immediately waits), then fire the
+    # bot's own VOICE_STATE_UPDATE; the waiter must complete.
+    wait_task = asyncio.create_task(lavalink_glue.wait_for_voice_ready(111, timeout=1.0))
+    await asyncio.sleep(0)
     event = _make_voice_state_event(user_id=42, bot_user_id=42, channel_id=999)
     await lavalink_glue._on_voice_state_update(event)
-
-    # ``wait_for_voice_ready`` should now resolve immediately.
-    ok = await lavalink_glue.wait_for_voice_ready(111, timeout=0.05)
-    assert ok is True
+    assert await wait_task is True
 
 
 async def test_voice_state_listener_does_not_set_event_for_other_users() -> None:
@@ -274,18 +281,17 @@ async def test_voice_state_listener_does_not_set_event_for_other_users() -> None
 
 
 async def test_voice_state_listener_resets_event_when_bot_disconnects() -> None:
-    """If the bot leaves, the next ``/play`` must wait again — clear the event."""
+    """If the bot leaves, the per-guild event entry is removed."""
     fake_client = _FakeLavalinkClient()
     lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, fake_client))
 
     join_event = _make_voice_state_event(user_id=42, bot_user_id=42, channel_id=999)
     await lavalink_glue._on_voice_state_update(join_event)
-    assert await lavalink_glue.wait_for_voice_ready(111, timeout=0.05) is True
+    assert 111 in lavalink_glue._voice_ready_events
 
     leave_event = _make_voice_state_event(user_id=42, bot_user_id=42, channel_id=None)
     await lavalink_glue._on_voice_state_update(leave_event)
-
-    assert await lavalink_glue.wait_for_voice_ready(111, timeout=0.05) is False
+    assert 111 not in lavalink_glue._voice_ready_events
 
 
 async def test_wait_for_voice_ready_returns_false_on_timeout() -> None:
@@ -310,6 +316,38 @@ async def test_wait_for_voice_ready_resolves_when_join_arrives_after_wait_starts
     join_event = _make_voice_state_event(user_id=42, bot_user_id=42, channel_id=999)
     await lavalink_glue._on_voice_state_update(join_event)
 
+    assert await wait_task is True
+
+
+async def test_wait_for_voice_ready_clears_stale_event_after_channel_move() -> None:
+    """A non-disconnect move (A → B) leaves the prior event set; clear it.
+
+    Regression for MEDIUM-2: ``_voice_ready_events`` is reset only on
+    disconnect (channel_id None). A bot dragged to another channel by an
+    admin or a /play after a /leave race must not return True instantly
+    on a stale event — lavalink.py needs the new VOICE_SERVER_UPDATE
+    before it can play to the new channel.
+    """
+    fake_client = _FakeLavalinkClient()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, fake_client))
+
+    # Synthesise the prior session: an event was created and set by an
+    # earlier own-VoiceStateUpdate for channel A. The entry persists
+    # until the bot disconnects (channel_id None), which has not
+    # happened — a move from A to B leaves it set.
+    stale = asyncio.Event()
+    stale.set()
+    lavalink_glue._voice_ready_events[111] = stale
+
+    # The next ``wait_for_voice_ready`` must NOT return True instantly
+    # on the stale event — it must block until the next own-state lands.
+    assert await lavalink_glue.wait_for_voice_ready(111, timeout=0.05) is False
+
+    # When the new own-state arrives, the waiter wakes up.
+    wait_task = asyncio.create_task(lavalink_glue.wait_for_voice_ready(111, timeout=1.0))
+    await asyncio.sleep(0)
+    join_b = _make_voice_state_event(user_id=42, bot_user_id=42, channel_id=888)
+    await lavalink_glue._on_voice_state_update(join_b)
     assert await wait_task is True
 
 
@@ -575,7 +613,12 @@ class _ExceptionEvent:
 
 
 async def test_track_end_releases_audio_cache_pin() -> None:
-    """The TrackEnd hook MUST drop the audio cache refcount."""
+    """The TrackEnd hook MUST drop the audio cache refcount.
+
+    ``LocalAudioSourceManager`` sets ``AudioTrack.identifier`` to the
+    on-disk path; the release handler must recover the ``video_id``
+    from the path stem so the per-video pin actually decrements.
+    """
     from ryzic import audio_cache
 
     fake = _RecordingCache()
@@ -583,10 +626,11 @@ async def test_track_end_releases_audio_cache_pin() -> None:
     try:
         bot = _FakeApp()
         handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        path = "/var/cache/ryzic/audio/vi/vid67890.audio"
         await handler.on_track_end(
             cast(
                 lavalink.TrackEndEvent,
-                _EndEvent(track=_IdTrack(identifier="vid67890"), player=_PlayerWithGuild()),
+                _EndEvent(track=_IdTrack(identifier=path), player=_PlayerWithGuild()),
             )
         )
         assert fake.released == ["vid67890"]
@@ -604,10 +648,11 @@ async def test_track_exception_also_releases_audio_cache_pin() -> None:
         bot = _FakeApp()
         lavalink_glue.last_play_channel[111] = 999
         handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        path = "/var/cache/ryzic/audio/fa/failed01.audio"
         await handler.on_track_exception(
             cast(
                 lavalink.TrackExceptionEvent,
-                _ExceptionEvent(track=_IdTrack(identifier="failed01"), player=_PlayerWithGuild()),
+                _ExceptionEvent(track=_IdTrack(identifier=path), player=_PlayerWithGuild()),
             )
         )
         assert fake.released == ["failed01"]
@@ -641,3 +686,38 @@ async def test_release_swallows_exceptions(caplog: pytest.LogCaptureFixture) -> 
         assert any("failed to release" in r.message for r in caplog.records)
     finally:
         audio_cache.set_audio_cache(None)
+
+
+async def test_release_with_path_identifier_decrements_real_cache_pin(
+    tmp_path: Path,
+) -> None:
+    """Drive a real ``AudioCache`` to confirm path-stem extraction lands on the right key.
+
+    Regression for HIGH-1: ``LocalAudioSourceManager`` populates
+    ``AudioTrack.identifier`` with the on-disk path. Pinning happens by
+    ``video_id`` (in ``get_or_download``); release must extract the
+    same key from the path or eviction is permanently skipped.
+    """
+    from ryzic import audio_cache
+    from ryzic.audio_cache import AudioCache
+
+    cache = AudioCache(tmp_path, max_bytes=10_000_000)
+    await cache.open()
+    audio_cache.set_audio_cache(cache)
+    try:
+        video_id = "dQw4w9WgXcQ"
+        # Simulate the ``get_or_download`` pin without doing the actual
+        # download (we're testing release semantics, not download).
+        cache._in_use[video_id] += 1
+        assert cache._in_use[video_id] == 1
+
+        # Path that ``LocalAudioSourceManager`` would surface as the
+        # AudioTrack identifier for this cached file.
+        path = str(tmp_path / "audio" / video_id[:2] / f"{video_id}.audio")
+        await lavalink_glue._release_track(cast(lavalink.AudioTrack, _IdTrack(identifier=path)))
+
+        # Counter must return to zero (key removed by ``release``).
+        assert video_id not in cache._in_use
+    finally:
+        audio_cache.set_audio_cache(None)
+        await cache.close()

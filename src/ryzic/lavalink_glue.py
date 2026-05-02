@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from pathlib import Path
 from typing import cast
 
 import hikari
@@ -95,8 +96,14 @@ async def wait_for_voice_ready(guild_id: int, timeout: float = VOICE_READY_TIMEO
     timeout. Callers should treat ``False`` as "abort the play attempt and
     surface a friendly error" rather than retrying — the gateway timed out,
     not a transient race.
+
+    The event is cleared up-front so a stale "ready" from a prior session
+    cannot return True instantly: a channel move from A → B (both non-None)
+    leaves the old event set, but lavalink.py won't see the new
+    VOICE_SERVER_UPDATE for B until the setter re-fires.
     """
     event = _voice_ready_events.setdefault(guild_id, asyncio.Event())
+    event.clear()
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
     except TimeoutError:
@@ -194,12 +201,18 @@ async def _release_track(track: lavalink.AudioTrack | None) -> None:
     identifier = getattr(track, "identifier", None)
     if not identifier:
         return
+    # ``LocalAudioSourceManager`` populates ``AudioTrackInfo.identifier``
+    # with the file path we passed to ``node.get_tracks(...)`` — e.g.
+    # ``/var/cache/ryzic/audio/dQ/dQw4w9WgXcQ.audio``. The cache pins
+    # by ``video_id``, so we strip the path components to recover it
+    # (file stem == video_id by construction in ``audio_cache._audio_path``).
+    video_id = Path(identifier).stem
     try:
-        await cache.release(identifier)
+        await cache.release(video_id)
     except Exception:
         # Releasing should never raise; log + swallow rather than letting
         # the lavalink event hook take down the player loop.
-        _log.exception("failed to release audio cache entry %s", identifier)
+        _log.exception("failed to release audio cache entry %s", video_id)
 
 
 def _safe_error_text(text: str | None) -> str:
