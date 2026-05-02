@@ -12,10 +12,6 @@ from . import audio_cache, config, lavalink_glue
 
 _log = logging.getLogger(__name__)
 
-# 1 GiB in bytes — keeps the LRU cap arithmetic in a single place so the
-# eviction loop and the env-var docs read the same units.
-_BYTES_PER_GB = 1024**3
-
 
 def _build_client(bot: hikari.GatewayBot, cfg: config.Config) -> lightbulb.Client:
     client = lightbulb.client_from_app(
@@ -43,7 +39,7 @@ async def _bootstrap_audio_cache(cfg: config.Config) -> audio_cache.AudioCache:
     have left partial files in ``tmp/`` and orphaned audio files
     whose sqlite rows never made it to disk. Cheap once per boot.
     """
-    cache = audio_cache.AudioCache(cfg.cache_dir, max_bytes=cfg.cache_max_gb * _BYTES_PER_GB)
+    cache = audio_cache.AudioCache(cfg.cache_dir, max_bytes=cfg.cache_max_gb * 1024**3)
     await cache.open()
     deleted = await audio_cache.sweep_orphans(cfg.cache_dir)
     if deleted:

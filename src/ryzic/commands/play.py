@@ -1,28 +1,13 @@
 """``/play`` slash command (M1 §3).
 
-Single source of truth for all the URL → playback wiring. The handler:
+Single source of truth for all the URL → playback wiring. Friendly
+error sentences come VERBATIM from the wrapper exceptions (M1 §6
+fixed those to be user-presentable); we never re-translate them.
 
-1. Defers the response (public, since success embeds are public).
-2. Validates the URL via :func:`ryzic.url_validator.is_supported_url`.
-3. Detects whether the URL is a playlist (``list=`` query param) and
-   resolves metadata via either :func:`ryzic.ytdlp.resolve_track` or
-   :func:`ryzic.playlist_cache.fetch_with_fallback` accordingly.
-4. Verifies voice prerequisites: invoker is in a voice channel, the
-   channel is not a stage, the bot is not pinned in another channel,
-   the lavalink + audio cache singletons are bootstrapped, the queue
-   has capacity for the new tracks.
-5. Connects via ``bot.update_voice_state`` and waits for the voice
-   handshake (handled by ``lavalink_glue.wait_for_voice_ready``) before
-   touching the player.
-6. Per track: downloads via :class:`ryzic.audio_cache.AudioCache`,
-   loads via Lavalink's ``LocalAudioSourceManager``, calls
-   ``player.add``. Releases the audio cache pin on load failure so
-   eviction stays unblocked.
-7. Calls ``player.play()`` only when the player wasn't already playing.
-
-All friendly error sentences come VERBATIM from the wrapper exceptions
-(M1 §6 fixed those to be user-presentable). The handler never rewrites
-them; that contract keeps the failure surface understandable.
+Order of operations is deliberately load-then-connect: voice is only
+joined once we have a playable track. Otherwise a yt-dlp / Lavalink
+load failure leaves the bot squatting in voice with no auto-leave
+arming (only ``QueueEndEvent`` arms it, and nothing ever played).
 """
 
 from __future__ import annotations
@@ -51,6 +36,12 @@ _QUEUE_CAP: int = 500
 # command-side guard exists so we can map "the gateway never confirmed"
 # to a friendly ephemeral rather than an opaque ``RuntimeError``.
 _VOICE_READY_TIMEOUT_S: float = 5.0
+
+# M1 §3: a single user-facing string covers every "the audio plumbing
+# isn't ready" failure (missing cache, missing lavalink client, no
+# available nodes, voice handshake timeout). Users don't distinguish
+# the layers — and a single string keeps the failure surface small.
+_AUDIO_SERVICE_DOWN: str = "Audio service is down. Try again in a minute."
 
 
 @loader.command
@@ -101,18 +92,41 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
     # missing client. Both surface as the same friendly message — users
     # don't care which layer is asleep.
     if cache is None or ll_client is None or not ll_client.node_manager.available_nodes:
+        await ctx.respond(_AUDIO_SERVICE_DOWN, ephemeral=True)
+        return
+
+    bot = cast(hikari.GatewayBot, ctx.client.app)
+    user_state = bot.cache.get_voice_state(guild_id, ctx.user.id)
+    if user_state is None or user_state.channel_id is None:
+        await ctx.respond("Join a voice channel first.", ephemeral=True)
+        return
+    user_channel_id = int(user_state.channel_id)
+
+    user_channel = bot.cache.get_guild_channel(user_channel_id)
+    # ``get_guild_channel`` returns ``None`` if the channel isn't in
+    # the cache (e.g. recently created). Treating an unknown channel
+    # type as "not stage" preserves the old behaviour rather than
+    # blocking legitimate /play attempts on cold caches.
+    if user_channel is not None and user_channel.type == hikari.ChannelType.GUILD_STAGE:
         await ctx.respond(
-            "Audio service is down. Try again in a minute.",
+            "Stage channels aren't supported. Use a regular voice channel.",
             ephemeral=True,
         )
         return
 
-    bot = cast(hikari.GatewayBot, ctx.client.app)
-    voice_check = _check_voice_state(bot, guild_id, ctx.user.id)
-    if isinstance(voice_check, str):
-        await ctx.respond(voice_check, ephemeral=True)
-        return
-    user_channel_id = voice_check
+    me = bot.get_me()
+    if me is not None:
+        bot_state = bot.cache.get_voice_state(guild_id, me.id)
+        if (
+            bot_state is not None
+            and bot_state.channel_id is not None
+            and int(bot_state.channel_id) != user_channel_id
+        ):
+            await ctx.respond(
+                f"I'm already playing in <#{int(bot_state.channel_id)}>. Join that channel.",
+                ephemeral=True,
+            )
+            return
 
     # Track the channel before the long async work below so a
     # TrackException firing mid-load posts back to the right place.
@@ -124,39 +138,6 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
         await _play_single(ctx, url, cache, ll_client, bot, guild_id, user_channel_id)
 
 
-def _check_voice_state(bot: hikari.GatewayBot, guild_id: int, user_id: int) -> int | str:
-    """Return the user's voice channel id, or an ephemeral error string.
-
-    Encodes all the precondition checks that don't depend on the
-    yt-dlp resolution: user must be in voice, the channel must be
-    non-stage, and the bot (if already in voice) must be in the
-    same channel.
-    """
-    user_state = bot.cache.get_voice_state(guild_id, user_id)
-    if user_state is None or user_state.channel_id is None:
-        return "Join a voice channel first."
-
-    user_channel_id = int(user_state.channel_id)
-    user_channel = bot.cache.get_guild_channel(user_channel_id)
-    # ``get_guild_channel`` returns ``None`` if the channel isn't in
-    # the cache (e.g. recently created). Treating an unknown channel
-    # type as "not stage" preserves the old behaviour rather than
-    # blocking legitimate /play attempts on cold caches.
-    if user_channel is not None and user_channel.type == hikari.ChannelType.GUILD_STAGE:
-        return "Stage channels aren't supported. Use a regular voice channel."
-
-    me = bot.get_me()
-    if me is not None:
-        bot_state = bot.cache.get_voice_state(guild_id, me.id)
-        if (
-            bot_state is not None
-            and bot_state.channel_id is not None
-            and int(bot_state.channel_id) != user_channel_id
-        ):
-            return f"I'm already playing in <#{int(bot_state.channel_id)}>. Join that channel."
-    return user_channel_id
-
-
 def _is_playlist_url(url: str) -> bool:
     """Detect whether ``url`` carries a YouTube playlist id (``list=`` query)."""
     try:
@@ -164,20 +145,6 @@ def _is_playlist_url(url: str) -> bool:
     except ValueError:
         return False
     return "list" in parse_qs(parsed.query)
-
-
-async def _connect_and_wait(
-    bot: hikari.GatewayBot,
-    guild_id: int,
-    channel_id: int,
-) -> bool:
-    """Drive ``update_voice_state`` and block on the lavalink handshake.
-
-    Returns ``False`` on handshake timeout — the caller maps that to a
-    friendly ephemeral.
-    """
-    await bot.update_voice_state(guild_id, channel_id, self_deaf=True)
-    return await lavalink_glue.wait_for_voice_ready(guild_id, timeout=_VOICE_READY_TIMEOUT_S)
 
 
 async def _load_one(
@@ -223,15 +190,7 @@ async def _load_one(
         await cache.release(track_info.video_id)
         _log.warning("lavalink returned no tracks for %s", path)
         return None
-    track = result.tracks[0]
-    if isinstance(track, lavalink.DeferredAudioTrack):
-        # ``LocalAudioSourceManager`` shouldn't ever surface deferred
-        # tracks, but the union return type covers it; the Lavalink
-        # encoded payload is what player.add ultimately needs.
-        await cache.release(track_info.video_id)
-        _log.warning("lavalink unexpectedly returned a DeferredAudioTrack for %s", path)
-        return None
-    return track
+    return result.tracks[0]
 
 
 async def _play_single(
@@ -258,19 +217,21 @@ async def _play_single(
         )
         return
 
-    if not await _connect_and_wait(bot, guild_id, channel_id):
-        await ctx.respond(
-            "Couldn't connect to the voice channel. Try again in a moment.",
-            ephemeral=True,
-        )
-        return
-
+    # Load BEFORE connecting to voice — otherwise a load failure leaves
+    # the bot dangling in voice with no auto-leave (the timer only arms
+    # on QueueEndEvent, which needs a successful play).
     audio_track = await _load_one(cache, ll_client, track_info)
     if audio_track is None:
         await ctx.respond(
             "Could not load that track. Try a different URL.",
             ephemeral=True,
         )
+        return
+
+    await bot.update_voice_state(guild_id, channel_id, self_deaf=True)
+    if not await lavalink_glue.wait_for_voice_ready(guild_id, timeout=_VOICE_READY_TIMEOUT_S):
+        await cache.release(track_info.video_id)
+        await ctx.respond(_AUDIO_SERVICE_DOWN, ephemeral=True)
         return
 
     was_playing = player.is_playing
@@ -321,32 +282,44 @@ async def _play_playlist(
         )
         return
 
-    if not await _connect_and_wait(bot, guild_id, channel_id):
-        await ctx.respond(
-            "Couldn't connect to the voice channel. Try again in a moment.",
-            ephemeral=True,
-        )
-        return
+    # Load the first track BEFORE connecting to voice — otherwise a
+    # playlist where every entry fails leaves the bot dangling in voice
+    # (auto-leave only arms on QueueEndEvent, never reached here).
+    # Search forward for the first loadable entry to keep the friendly
+    # error semantically equivalent to the post-loop "all-fail" path.
+    first_index = -1
+    first_audio_track: lavalink.AudioTrack | None = None
+    for i, entry in enumerate(info.entries):
+        first_audio_track = await _load_one(cache, ll_client, entry)
+        if first_audio_track is not None:
+            first_index = i
+            break
 
-    was_playing = player.is_playing
-    enqueued = 0
-    for entry in info.entries:
-        audio_track = await _load_one(cache, ll_client, entry)
-        if audio_track is None:
-            continue
-        player.add(track=audio_track, requester=ctx.user.id)
-        enqueued += 1
-        if enqueued == 1 and not was_playing:
-            # Start playback as soon as the first track is enqueued so
-            # the user hears music while we keep loading the rest.
-            await player.play()
-
-    if enqueued == 0:
+    if first_audio_track is None:
         await ctx.respond(
             "Could not load any tracks from that playlist.",
             ephemeral=True,
         )
         return
+
+    await bot.update_voice_state(guild_id, channel_id, self_deaf=True)
+    if not await lavalink_glue.wait_for_voice_ready(guild_id, timeout=_VOICE_READY_TIMEOUT_S):
+        await cache.release(info.entries[first_index].video_id)
+        await ctx.respond(_AUDIO_SERVICE_DOWN, ephemeral=True)
+        return
+
+    was_playing = player.is_playing
+    player.add(track=first_audio_track, requester=ctx.user.id)
+    if not was_playing:
+        await player.play()
+    enqueued = 1
+
+    for entry in info.entries[first_index + 1 :]:
+        audio_track = await _load_one(cache, ll_client, entry)
+        if audio_track is None:
+            continue
+        player.add(track=audio_track, requester=ctx.user.id)
+        enqueued += 1
 
     cache_is_stale = used_cache and playlist_cache.is_stale(fetched_at)
     embed = ux.build_queued_playlist_embed(

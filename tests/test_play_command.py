@@ -151,15 +151,12 @@ class _FakeNodeManager:
 
 @dataclass
 class _FakeAudioTrack:
-    """Slim AudioTrack-shape — enough that ``isinstance`` against
-    ``DeferredAudioTrack`` returns False (it does because we're not it)."""
+    """Slim AudioTrack stand-in — covers the duck shape ``player.add`` reads."""
 
     title: str = "Some Song"
     identifier: str = "abc123"
     duration: int = 213_000
     uri: str = "https://example.com/x"
-
-    # These satisfy lavalink's `AudioTrack` duck shape minimally.
 
 
 @dataclass
@@ -515,12 +512,23 @@ async def test_single_track_queue_full_rejects(cache: Any) -> None:
 
 
 async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> None:
+    """Handshake timeout maps to the spec'd "audio service down" string.
+
+    The track must already be loaded by the time we connect (load-first
+    order, MEDIUM-1) so the test wires up the full happy load path then
+    fails on the handshake.
+    """
     bot = _bot_in_voice_with(user_channel_id=999)
     ctx = _FakeContext(bot)
-    ll, _node = _ll_with_one_node()
+    ll, node = _ll_with_one_node()
     lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
 
     track = _track()
+    audio_track = _FakeAudioTrack(title=track.title, identifier=track.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+    release_mock = AsyncMock()
     with (
         patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
         patch.object(
@@ -528,6 +536,7 @@ async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> Non
             "get_or_download",
             AsyncMock(return_value=Path("/var/cache/x")),
         ),
+        patch.object(audio_cache.AudioCache, "release", release_mock),
         patch.object(
             lavalink_glue,
             "wait_for_voice_ready",
@@ -538,16 +547,28 @@ async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> Non
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
-    assert "Couldn't connect" in str(ctx.responses[0][0])
+    assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
+    # The pin acquired by get_or_download must be released because we
+    # never enqueued the track (handshake failed).
+    release_mock.assert_awaited_once_with(track.video_id)
 
 
-async def test_lavalink_returns_no_tracks_releases_pin(cache: Any) -> None:
+@pytest.mark.parametrize(
+    "load_result",
+    [
+        _FakeLoadResult.empty(),
+        _FakeLoadResult(load_type=lavalink.server.LoadType.ERROR, tracks=[], error="boom"),
+    ],
+    ids=["empty", "load-error"],
+)
+async def test_lavalink_load_failure_releases_pin(cache: Any, load_result: _FakeLoadResult) -> None:
+    """Both EMPTY and ERROR load types must drop the cache pin (M1 §4)."""
     bot = _bot_in_voice_with(user_channel_id=999)
     ctx = _FakeContext(bot)
     ll, node = _ll_with_one_node()
     lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
     track = _track()
-    node.get_tracks_results.append(_FakeLoadResult.empty())
+    node.get_tracks_results.append(load_result)
 
     with (
         patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
@@ -556,11 +577,7 @@ async def test_lavalink_returns_no_tracks_releases_pin(cache: Any) -> None:
             "get_or_download",
             AsyncMock(return_value=Path("/var/cache/x")),
         ),
-        patch.object(
-            audio_cache.AudioCache,
-            "release",
-            AsyncMock(),
-        ) as release_mock,
+        patch.object(audio_cache.AudioCache, "release", AsyncMock()) as release_mock,
         patch.object(
             lavalink_glue,
             "wait_for_voice_ready",
@@ -571,45 +588,8 @@ async def test_lavalink_returns_no_tracks_releases_pin(cache: Any) -> None:
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
-    # The cache pin acquired by the (mocked) get_or_download must be
-    # released on Lavalink load failure (M1 §4 release contract).
     release_mock.assert_awaited_once_with(track.video_id)
     assert "Could not load that track" in str(ctx.responses[0][0])
-
-
-async def test_lavalink_load_error_releases_pin(cache: Any) -> None:
-    bot = _bot_in_voice_with(user_channel_id=999)
-    ctx = _FakeContext(bot)
-    ll, node = _ll_with_one_node()
-    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
-    track = _track()
-    node.get_tracks_results.append(
-        _FakeLoadResult(load_type=lavalink.server.LoadType.ERROR, tracks=[], error="boom"),
-    )
-
-    with (
-        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
-        patch.object(
-            audio_cache.AudioCache,
-            "get_or_download",
-            AsyncMock(return_value=Path("/var/cache/x")),
-        ),
-        patch.object(
-            audio_cache.AudioCache,
-            "release",
-            AsyncMock(),
-        ) as release_mock,
-        patch.object(
-            lavalink_glue,
-            "wait_for_voice_ready",
-            AsyncMock(return_value=True),
-        ),
-    ):
-        await play_module._handle_play(
-            cast(lightbulb.Context, ctx),
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        )
-    release_mock.assert_awaited_once_with(track.video_id)
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +604,9 @@ async def test_lavalink_load_error_releases_pin(cache: Any) -> None:
         ("https://www.youtube.com/playlist?list=PL123", True),
         ("https://www.youtube.com/watch?v=abc&list=PL123", True),
         ("https://youtu.be/abc?si=xyz", False),
+        # parse_qs accepts arbitrary strings; the helper must not blow up.
+        ("not://a-url", False),
+        ("", False),
     ],
 )
 def test_is_playlist_url(url: str, expected: bool) -> None:
@@ -819,22 +802,35 @@ async def test_playlist_yt_dlp_total_failure_returns_friendly(cache: Any) -> Non
 
 
 async def test_playlist_voice_handshake_timeout(cache: Any) -> None:
+    """Handshake timeout maps to the spec'd "audio service down" string."""
     bot = _bot_in_voice_with(user_channel_id=999)
     ctx = _FakeContext(bot)
-    ll, _ = _ll_with_one_node()
+    ll, node = _ll_with_one_node()
     lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
 
+    entry = _track()
     info = PlaylistInfo(
         playlist_id="PL12345abcde",
         title="will-time-out",
-        entries=[_track()],
+        entries=[entry],
     )
+    audio_track = _FakeAudioTrack(title=entry.title, identifier=entry.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+    release_mock = AsyncMock()
     with (
         patch.object(
             play_module.playlist_cache,
             "fetch_with_fallback",
             AsyncMock(return_value=(info, 1234567890, False)),
         ),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(audio_cache.AudioCache, "release", release_mock),
         patch.object(
             lavalink_glue,
             "wait_for_voice_ready",
@@ -845,7 +841,8 @@ async def test_playlist_voice_handshake_timeout(cache: Any) -> None:
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/playlist?list=PL12345abcde",
         )
-    assert "Couldn't connect" in str(ctx.responses[0][0])
+    assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
+    release_mock.assert_awaited_once_with(entry.video_id)
 
 
 async def test_load_one_handles_node_get_tracks_exception(cache: Any) -> None:
@@ -907,12 +904,6 @@ async def test_yt_dlp_download_failure_per_track_drops_track(cache: Any) -> None
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
     assert "Could not load that track" in str(ctx.responses[0][0])
-
-
-def test_is_playlist_url_handles_garbage() -> None:
-    # parse_qs accepts arbitrary strings; the helper must not blow up.
-    assert play_module._is_playlist_url("not://a-url") is False
-    assert play_module._is_playlist_url("") is False
 
 
 # ---------------------------------------------------------------------------
