@@ -144,27 +144,16 @@ async def test_validate_accepts_valid(playlist_id: str, tmp_path: Path) -> None:
         "abc?def",  # query fragment
         "abc/def",  # slash
         "abc\x00def",  # nul byte
+        # Default-mode ``$`` matches before a final ``\n``; ``fullmatch``
+        # is the fix. These cases pin the regression.
+        "PLabcdefghi\n",
+        "PLabcdefghi\r\n",
+        "\nPLabcdefghi",
     ],
 )
-async def test_validate_rejects_invalid_on_read(playlist_id: str, tmp_path: Path) -> None:
+def test_validate_playlist_id_rejects_invalid(playlist_id: str) -> None:
     with pytest.raises(InvalidVideoID):
-        await playlist_cache.read(playlist_id, tmp_path)
-
-
-@pytest.mark.parametrize(
-    "playlist_id",
-    [
-        "",
-        "short",
-        "../../etc/passwd",
-        "abc/../bad",
-        "abc def",
-    ],
-)
-async def test_validate_rejects_invalid_on_write(playlist_id: str, tmp_path: Path) -> None:
-    info = PlaylistInfo(playlist_id=playlist_id, title="t", entries=[])
-    with pytest.raises(InvalidVideoID):
-        await playlist_cache.write(playlist_id, info, tmp_path)
+        playlist_cache._validate_playlist_id(playlist_id)
 
 
 async def test_traversal_id_does_not_create_file_outside_cache(tmp_path: Path) -> None:
@@ -178,9 +167,26 @@ async def test_traversal_id_does_not_create_file_outside_cache(tmp_path: Path) -
     assert not (tmp_path.parent / "escape.json").exists()
 
 
-# ---------------------------------------------------------------------------
-# is_stale: 24h boundary
-# ---------------------------------------------------------------------------
+async def test_fetch_with_fallback_rejects_trailing_newline_list_param(
+    tmp_path: Path,
+) -> None:
+    # ``%0a`` decodes to ``\n``; a buggy ``$`` anchor would let it slip
+    # into ``_path_for`` and pollute the cache namespace + the log line.
+    bad_url = f"https://www.youtube.com/playlist?list={PLIST_ID}%0a"
+    with (
+        patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("x")),
+        pytest.raises(FetchFailed),
+    ):
+        await playlist_cache.fetch_with_fallback(bad_url, cache_root=tmp_path)
+
+
+async def test_extract_playlist_id_picks_first_when_list_param_repeats() -> None:
+    # ``parse_qs`` returns all values; we deterministically pick the
+    # first. If that first is invalid we fail-closed (no scanning).
+    first_bad = f"https://www.youtube.com/playlist?list=../bad&list={PLIST_ID}"
+    assert playlist_cache._extract_playlist_id(first_bad) is None
+    first_good = f"https://www.youtube.com/playlist?list={PLIST_ID}&list=PLother_______"
+    assert playlist_cache._extract_playlist_id(first_good) == PLIST_ID
 
 
 def _write_with_fetched_at(tmp_path: Path, fetched_at: int) -> PlaylistInfo:

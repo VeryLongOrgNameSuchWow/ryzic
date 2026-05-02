@@ -30,9 +30,11 @@ _log = logging.getLogger(__name__)
 
 # YouTube playlist IDs are typically 13-34 chars; bound generously while
 # constraining the charset to the same path-safe alphabet used for video
-# IDs in :mod:`ryzic.ytdlp`. Validation runs BEFORE any path join so an
-# adversarial id like ``../../etc`` cannot escape ``cache_root``.
-_PLAYLIST_ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{10,50}$")
+# IDs in :mod:`ryzic.ytdlp`. Always validated with ``fullmatch`` so a
+# trailing ``\n`` cannot satisfy ``$`` and slip a control character into
+# a filename or log line; runs BEFORE any path join so an adversarial id
+# like ``../../etc`` cannot escape ``cache_root``.
+_PLAYLIST_ID_RE: Final = re.compile(r"[A-Za-z0-9_-]{10,50}")
 
 _TTL_SECONDS: Final = 24 * 60 * 60
 
@@ -40,14 +42,24 @@ _PLAYLISTS_DIR: Final = "playlists"
 
 
 def _validate_playlist_id(playlist_id: str) -> None:
-    if not _PLAYLIST_ID_RE.match(playlist_id):
+    # ``fullmatch`` (not ``match``) so a trailing ``\n`` cannot satisfy
+    # ``$`` and slip a control character into the on-disk filename or a
+    # log line — Python's default-mode ``$`` matches before a final
+    # newline.
+    if not _PLAYLIST_ID_RE.fullmatch(playlist_id):
         raise InvalidVideoID(f"playlist_id failed validation: {playlist_id!r}")
 
 
 def _path_for(playlist_id: str, cache_root: Path) -> Path:
-    """Return the JSON path for ``playlist_id`` after validating the id."""
     _validate_playlist_id(playlist_id)
-    return cache_root / _PLAYLISTS_DIR / f"{playlist_id}.json"
+    derived = cache_root / _PLAYLISTS_DIR / f"{playlist_id}.json"
+    # Belt-and-braces: if the regex ever loosens, the resolved path must
+    # still live under ``cache_root``.
+    try:
+        derived.resolve().relative_to(cache_root.resolve())
+    except ValueError as exc:
+        raise InvalidVideoID(f"playlist_id resolves outside cache_root: {playlist_id!r}") from exc
+    return derived
 
 
 def _serialize(info: PlaylistInfo, fetched_at: int) -> dict[str, Any]:
@@ -167,7 +179,13 @@ def is_stale(info: PlaylistInfo, *, cache_root: Path) -> bool:
 
 
 def _extract_playlist_id(url: str) -> str | None:
-    """Pull the ``list=`` query param from a YouTube URL, or ``None``."""
+    """Pull the first ``list=`` query param from a YouTube URL, or ``None``.
+
+    When ``list=`` repeats, ``parse_qs`` returns all values; we pick the
+    first deterministically. If that first value fails validation, the
+    function returns ``None`` rather than scanning later values — every
+    cache lookup must agree on a single canonical id per URL.
+    """
     try:
         parsed = urlparse(url)
     except ValueError:
@@ -176,7 +194,7 @@ def _extract_playlist_id(url: str) -> str | None:
     if not values:
         return None
     candidate = values[0]
-    return candidate if _PLAYLIST_ID_RE.match(candidate) else None
+    return candidate if _PLAYLIST_ID_RE.fullmatch(candidate) else None
 
 
 async def fetch_with_fallback(url: str, *, cache_root: Path) -> tuple[PlaylistInfo, bool]:
