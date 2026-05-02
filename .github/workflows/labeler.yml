@@ -1,0 +1,28 @@
+name: Labeler
+
+# Auto-applies area:* labels to PRs based on the changed-files paths matched
+# in `.github/labeler.yml`. Saves manual triage; lets dashboards filter by
+# area.
+#
+# `pull_request_target` runs with the BASE repo's workflow file + write
+# permissions to the labels — same as the labeler README's recommended setup.
+# Note: this means we never run untrusted PR code; the workflow only reads
+# the changed-file list from the GitHub event payload, never executes the PR
+# branch's contents.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@634933edcd8ababfe52f92936142cc22ac488b1b  # v6.0.1
+        with:
+          configuration-path: .github/labeler.yml
+          sync-labels: true

@@ -1,0 +1,40 @@
+name: CodeQL
+
+# GitHub-hosted static security analysis. Runs on every PR + push to main, and
+# weekly on a schedule so we still scan in quiet weeks. Findings show up in
+# the Security tab and block PRs that introduce new issues (configurable in
+# repo settings).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 07:17 UTC. Off-zero minute on purpose so we don't pile
+    # onto every other GHA scheduled job firing at :00.
+    - cron: "17 7 * * 1"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: github/codeql-action/init@c3f298df8c1fea2fefe20c785e6aa00f32df8260  # v4.35.3
+        with:
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/analyze@c3f298df8c1fea2fefe20c785e6aa00f32df8260  # v4.35.3
