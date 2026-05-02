@@ -1,6 +1,8 @@
 # ryzic
 
 [![CI](https://github.com/VeryLongOrgNameSuchWow/ryzic/actions/workflows/ci.yml/badge.svg)](https://github.com/VeryLongOrgNameSuchWow/ryzic/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/VeryLongOrgNameSuchWow/ryzic/actions/workflows/codeql.yml/badge.svg)](https://github.com/VeryLongOrgNameSuchWow/ryzic/actions/workflows/codeql.yml)
+[![Latest release](https://img.shields.io/github/v/release/VeryLongOrgNameSuchWow/ryzic?include_prereleases&sort=semver)](https://github.com/VeryLongOrgNameSuchWow/ryzic/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
