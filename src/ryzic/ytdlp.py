@@ -1,23 +1,14 @@
 """Async wrapper around yt-dlp's embedded Python API (per M1 §6).
 
-Module functions only — no class. Sync ``YoutubeDL`` calls are dispatched
-to a worker thread via :func:`asyncio.to_thread` so the event loop stays
-unblocked. The embedded API is used exclusively; we never spawn a
-subprocess and never invoke a shell.
+Sync ``YoutubeDL`` calls are dispatched to a worker thread via
+:func:`asyncio.to_thread` so the event loop stays unblocked. The
+embedded API is used exclusively; we never spawn a subprocess and never
+invoke a shell.
 
-Public surface:
-
-* :func:`resolve_track` — metadata for a single video URL.
-* :func:`resolve_playlist` — flat metadata listing for a playlist URL.
-* :func:`download` — download audio for ``url`` to ``dest`` under ``cache_root``.
-* :func:`validate_video_id` — raises :class:`~ryzic.errors.InvalidVideoID`
-  for IDs outside the allowed character set / length window. Exposed so
-  the cache layer can pre-validate before constructing paths.
-
-Errors are normalized to :class:`~ryzic.errors.FetchFailed` with a short,
-user-presentable message; the ``/play`` command remaps known patterns
-to friendlier wording. Full tracebacks for unexpected failures are
-logged at ``ERROR``.
+Errors are normalized to :class:`~ryzic.errors.FetchFailed` with a
+short, user-presentable sentence (per M1 §3) ready for ``/play`` to
+display verbatim. Full tracebacks for unexpected failures are logged at
+``ERROR``.
 """
 
 from __future__ import annotations
@@ -30,9 +21,10 @@ from pathlib import Path
 from typing import Any, Final
 
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError
+from yt_dlp.utils import YoutubeDLError
 
 from .errors import FetchFailed, InvalidVideoID
+from .url_validator import is_supported_url
 
 _log = logging.getLogger(__name__)
 
@@ -43,15 +35,27 @@ _VIDEO_ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
 # and intentionally excluded.
 _LIVE_STATUSES: Final = frozenset({"is_live", "is_upcoming"})
 
-# Known yt-dlp error fragments mapped to clean, user-presentable
-# messages. Matched substring-wise against the first line of
-# ``DownloadError.args[0]``. Order doesn't matter — each pattern is
-# unique enough to discriminate.
-_FRIENDLY_ERROR_PATTERNS: Final[tuple[tuple[str, str], ...]] = (
-    ("Sign in to confirm your age", "age-restricted"),
-    ("Private video", "private video"),
-    ("Video unavailable", "region-blocked or unavailable"),
-)
+# User-facing sentences per M1 §3. Exact strings are part of the
+# wrapper's contract: ``/play`` displays them verbatim. Substring-matched
+# against the first line of yt-dlp's ``DownloadError``.
+_FRIENDLY_ERRORS: Final[dict[str, str]] = {
+    "Sign in to confirm your age": "That video is age-restricted and can't be played.",
+    "Private video": "That video is private.",
+    "Video unavailable": "That video is not available in this region.",
+}
+
+_LIVESTREAM_MESSAGE: Final = "Livestreams are not supported in this version."
+_UNSUPPORTED_URL_MESSAGE: Final = "Only YouTube URLs are supported."
+
+# Cap and scrub yt-dlp error fragments before they surface to users.
+# Backticks are stripped so the embed builder can wrap the message in an
+# inline code span without breakout. Absolute-looking paths are masked
+# so the host's filesystem layout doesn't leak via Discord.
+_MAX_ERROR_LEN: Final = 200
+# Match absolute-looking paths (Unix and Windows). Negative lookbehind on
+# ``:`` and ``/`` keeps URL schemes/hostnames intact while still scrubbing
+# the path component.
+_PATH_LIKE_RE: Final = re.compile(r"(?<![:/])(?:[A-Za-z]:)?/[A-Za-z0-9_.\\-][A-Za-z0-9_./\\-]*")
 
 
 @dataclass(frozen=True)
@@ -76,12 +80,13 @@ def validate_video_id(video_id: str) -> None:
         raise InvalidVideoID(f"video_id failed validation: {video_id!r}")
 
 
-def _base_opts(cache_root: Path) -> dict[str, Any]:
+def _base_opts() -> dict[str, Any]:
     """Build the frozen yt-dlp options dict (per M1 §6).
 
     Format priority constrains output to known-good Lavaplayer codecs
-    (review §6 LOAD_FAILED on exotic codecs). ``cookiefile`` MUST stay
-    None — see §6 security item 13.
+    (review §6 LOAD_FAILED on exotic codecs). Cookies (``cookiefile``
+    AND ``cookiesfrombrowser``) MUST stay disabled — see §6 security
+    item 13.
     """
     return {
         "format": ("bestaudio[ext=m4a]/bestaudio[ext=opus]/bestaudio[ext=webm]/bestaudio"),
@@ -90,58 +95,33 @@ def _base_opts(cache_root: Path) -> dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
         "no_color": True,
-        "paths": {"home": str(cache_root / "tmp")},
         "restrictfilenames": True,
         "concurrent_fragment_downloads": 1,
         "geo_bypass": False,
         "max_filesize": 500_000_000,
         "playlist_items": "1-1000",
-        # SECURITY: cookies are deliberately disabled. Enabling them
-        # exposes the host's YouTube session to any URL the bot
-        # resolves; out of M1 scope and requires its own security
-        # review before flipping.
+        # SECURITY: cookies (both file-based and browser-extracted) are
+        # deliberately disabled. Enabling either exposes the host's
+        # YouTube session to any URL the bot resolves; out of M1 scope
+        # and requires its own security review before flipping.
         "cookiefile": None,
-        "logger": _log,
+        "cookiesfrombrowser": None,
+        # SECURITY: disable yt-dlp's plugin auto-loader. The default
+        # (``['default']``) scans config dirs and ``sys.path`` for
+        # namespace packages named ``yt_dlp_plugins`` and executes
+        # them in-process. An empty list disables the entire mechanism.
+        "plugin_dirs": [],
+        # SECURITY: pin the extractor set to YouTube. The hostname
+        # allowlist is the primary defense; this is a second wall against
+        # the ``Generic`` extractor probing arbitrary HTML if a future
+        # yt-dlp release reorders match precedence. ``youtube`` covers
+        # watch/youtu.be URLs; ``youtube:tab`` covers playlists.
+        "allowed_extractors": ["youtube", "youtube:tab"],
     }
-
-
-def _first_line(message: str) -> str:
-    """Return the first non-empty line of ``message`` (defensively trimmed)."""
-    for line in message.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    return message.strip()
-
-
-def _map_friendly(detail: str) -> str | None:
-    for needle, friendly in _FRIENDLY_ERROR_PATTERNS:
-        if needle in detail:
-            return friendly
-    return None
-
-
-def _raise_from_download_error(exc: DownloadError) -> None:
-    """Translate a yt-dlp ``DownloadError`` into a :class:`FetchFailed`."""
-    detail = _first_line(str(exc))
-    friendly = _map_friendly(detail)
-    raise FetchFailed(friendly or detail) from exc
 
 
 def _is_livestream(info: dict[str, Any]) -> bool:
     return bool(info.get("is_live")) or info.get("live_status") in _LIVE_STATUSES
-
-
-def _check_not_livestream(info: dict[str, Any]) -> None:
-    if _is_livestream(info):
-        raise FetchFailed("livestream")
-
-
-def _reject_livestream_filter(info: dict[str, Any], *, incomplete: bool = False) -> str | None:
-    """yt-dlp ``match_filter`` callback that aborts before any bytes hit disk."""
-    if _is_livestream(info):
-        return "livestream"
-    return None
 
 
 def _coerce_duration_ms(raw: Any) -> int:
@@ -149,6 +129,20 @@ def _coerce_duration_ms(raw: Any) -> int:
     if raw is None:
         return 0
     return int(float(raw) * 1000)
+
+
+def _scrub(text: str) -> str:
+    """Strip backticks and absolute-looking paths; cap length.
+
+    Defense-in-depth (security review LOW-10): the embed builder will
+    further escape for Discord, but cleansing here makes every consumer
+    safe-by-default and prevents the host's filesystem layout from
+    leaking via yt-dlp error fragments.
+    """
+    cleaned = _PATH_LIKE_RE.sub("<path>", text).replace("`", "")
+    if len(cleaned) > _MAX_ERROR_LEN:
+        cleaned = cleaned[: _MAX_ERROR_LEN - 1].rstrip() + "…"
+    return cleaned
 
 
 def _track_from_info(info: dict[str, Any]) -> TrackInfo:
@@ -191,6 +185,7 @@ def _sync_extract(opts: dict[str, Any], url: str, *, download: bool) -> dict[str
         info = ydl.extract_info(url, download=download)
         if info is None:
             raise FetchFailed("yt-dlp returned no info")
+        # yt-dlp ships no type stubs, so ty sees the return as ``Any``.
         return ydl.sanitize_info(info)  # type: ignore[no-any-return]
 
 
@@ -205,25 +200,32 @@ async def _extract(
         return await asyncio.to_thread(_sync_extract, opts, url, download=download)
     except FetchFailed:
         raise
-    except DownloadError as exc:
-        _raise_from_download_error(exc)
-        # ``_raise_from_download_error`` always raises; this satisfies
-        # static analysis without a noqa.
-        raise AssertionError("unreachable") from None  # pragma: no cover
+    except YoutubeDLError as exc:
+        # ``DownloadError`` is the common case; widening to the parent
+        # catches sibling extractor errors that bypass yt-dlp's normal
+        # wrap (e.g. ``GeoRestrictedError`` raised from a custom path).
+        detail = next(
+            (s for s in (line.strip() for line in str(exc).splitlines()) if s),
+            str(exc).strip(),
+        )
+        scrubbed = _scrub(detail)
+        friendly = next((m for n, m in _FRIENDLY_ERRORS.items() if n in detail), None)
+        if friendly is None:
+            friendly = f"Could not load that URL. yt-dlp said: `{scrubbed}`"
+        raise FetchFailed(friendly) from exc
     except Exception as exc:
         _log.exception("yt-dlp internal error for url=%s", url)
         raise FetchFailed(f"internal error: {exc.__class__.__name__}") from exc
 
 
 async def resolve_track(url: str, *, cache_root: Path) -> TrackInfo:
-    """Resolve a single-video URL to a :class:`TrackInfo`.
-
-    Raises :class:`FetchFailed` (with ``"livestream"`` for active/upcoming
-    streams) on any yt-dlp failure.
-    """
-    opts = _base_opts(cache_root)
+    """Resolve a single-video URL to a :class:`TrackInfo`."""
+    if not is_supported_url(url):
+        raise FetchFailed(_UNSUPPORTED_URL_MESSAGE)
+    opts = _base_opts()
     info = await _extract(opts, url, download=False)
-    _check_not_livestream(info)
+    if _is_livestream(info):
+        raise FetchFailed(_LIVESTREAM_MESSAGE)
     return _track_from_info(info)
 
 
@@ -234,7 +236,9 @@ async def resolve_playlist(url: str, *, cache_root: Path) -> PlaylistInfo:
     trip; individual livestream checks happen later at per-track
     resolution time.
     """
-    opts = _base_opts(cache_root)
+    if not is_supported_url(url):
+        raise FetchFailed(_UNSUPPORTED_URL_MESSAGE)
+    opts = _base_opts()
     opts["noplaylist"] = False
     opts["extract_flat"] = True
     info = await _extract(opts, url, download=False)
@@ -259,9 +263,15 @@ async def download(url: str, dest: Path, *, cache_root: Path) -> None:
 
     The ``dest`` path is sandbox-checked via ``Path.relative_to``; on
     violation we raise :class:`InvalidVideoID` rather than letting
-    yt-dlp write outside the cache. Livestreams are rejected before any
-    bytes hit disk.
+    yt-dlp write outside the cache.
+
+    Note: a TOCTOU window remains between ``Path.resolve`` and
+    yt-dlp's actual ``open()``. The cache directory's permissions
+    (0o700, bot-owned) are the deploy-time mitigation; harder
+    O_NOFOLLOW-style guards are deferred to the cache subsystem (PR3b).
     """
+    if not is_supported_url(url):
+        raise FetchFailed(_UNSUPPORTED_URL_MESSAGE)
     resolved_root = cache_root.resolve()
     resolved_dest = dest.resolve()
     try:
@@ -269,10 +279,8 @@ async def download(url: str, dest: Path, *, cache_root: Path) -> None:
     except ValueError as exc:
         raise InvalidVideoID(f"download dest {dest!s} escapes cache_root {cache_root!s}") from exc
 
-    opts = _base_opts(cache_root)
+    opts = _base_opts()
     opts["outtmpl"] = str(resolved_dest)
-    opts["match_filter"] = _reject_livestream_filter
     info = await _extract(opts, url, download=True)
-    # Defense-in-depth: ``match_filter`` should have aborted, but a
-    # post-check costs nothing and keeps the contract explicit.
-    _check_not_livestream(info)
+    if _is_livestream(info):
+        raise FetchFailed(_LIVESTREAM_MESSAGE)

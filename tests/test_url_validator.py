@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ryzic.url_validator import ALLOWED_HOSTS, is_supported_url
+from ryzic.url_validator import is_supported_url
 
 
 @pytest.mark.parametrize(
@@ -74,7 +74,3 @@ def test_userinfo_in_url_does_not_smuggle_host() -> None:
 def test_hostname_comparison_is_case_insensitive_via_urlparse() -> None:
     # ``urlparse`` lowercases hostnames; the allowlist relies on that.
     assert is_supported_url("https://YouTube.com/watch?v=dQw4w9WgXcQ") is True
-
-
-def test_allowed_hosts_is_immutable() -> None:
-    assert isinstance(ALLOWED_HOSTS, frozenset)

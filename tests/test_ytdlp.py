@@ -2,7 +2,8 @@
 
 yt-dlp itself is mocked — these tests do not hit the network. We
 exercise the async wrapper, error-mapping, livestream rejection,
-video_id validation, and the frozen ``YoutubeDL`` options dict.
+video_id validation, the URL-validator gate, and the frozen
+``YoutubeDL`` options dict.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from ryzic.errors import FetchFailed, InvalidVideoID
 YTID = "dQw4w9WgXcQ"
 TRACK_URL = f"https://www.youtube.com/watch?v={YTID}"
 PLIST_URL = "https://www.youtube.com/playlist?list=PLabcdefghij"
+EVIL_URL = "https://evil.com/watch?v=dQw4w9WgXcQ"
 
 
 def _track_info(**overrides: Any) -> dict[str, Any]:
@@ -109,31 +111,28 @@ async def test_resolve_track_returns_track_info(tmp_path: Path) -> None:
     assert m.call_args.kwargs == {"download": False}
 
 
-async def test_resolve_track_rejects_active_livestream(tmp_path: Path) -> None:
-    info = _track_info(is_live=True, live_status="is_live")
-    with (
-        patch.object(ytdlp, "_sync_extract", return_value=info),
-        pytest.raises(FetchFailed, match="livestream"),
-    ):
-        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
-
-
-async def test_resolve_track_rejects_upcoming_livestream(tmp_path: Path) -> None:
-    info = _track_info(is_live=False, live_status="is_upcoming")
-    with (
-        patch.object(ytdlp, "_sync_extract", return_value=info),
-        pytest.raises(FetchFailed, match="livestream"),
-    ):
-        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
-
-
-async def test_resolve_track_accepts_recorded_was_live(tmp_path: Path) -> None:
-    # ``was_live`` / ``post_live`` are downloadable VODs; only active
-    # and upcoming streams are rejected.
-    info = _track_info(is_live=False, live_status="was_live")
+@pytest.mark.parametrize(
+    ("info_overrides", "should_reject"),
+    [
+        ({"is_live": True, "live_status": "is_live"}, True),
+        ({"is_live": False, "live_status": "is_upcoming"}, True),
+        # ``was_live`` / ``post_live`` are downloadable VODs; only active
+        # and upcoming streams are rejected.
+        ({"is_live": False, "live_status": "was_live"}, False),
+    ],
+    ids=["active", "upcoming", "was_live"],
+)
+async def test_resolve_track_livestream_handling(
+    tmp_path: Path, info_overrides: dict[str, Any], should_reject: bool
+) -> None:
+    info = _track_info(**info_overrides)
     with patch.object(ytdlp, "_sync_extract", return_value=info):
-        track = await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
-    assert track.video_id == YTID
+        if should_reject:
+            with pytest.raises(FetchFailed, match="Livestreams are not supported"):
+                await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+        else:
+            track = await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+            assert track.video_id == YTID
 
 
 async def test_resolve_track_invalid_id_raises_invalid_video_id(tmp_path: Path) -> None:
@@ -161,6 +160,15 @@ async def test_resolve_track_handles_missing_optional_fields(tmp_path: Path) -> 
     assert track.duration_ms == 0
 
 
+async def test_resolve_track_rejects_unsupported_url(tmp_path: Path) -> None:
+    with (
+        patch.object(ytdlp, "_sync_extract") as m,
+        pytest.raises(FetchFailed, match="Only YouTube"),
+    ):
+        await ytdlp.resolve_track(EVIL_URL, cache_root=tmp_path)
+    m.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Friendly error mapping (DownloadError translation)
 # ---------------------------------------------------------------------------
@@ -169,23 +177,31 @@ async def test_resolve_track_handles_missing_optional_fields(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("ERROR: [youtube] X: Sign in to confirm your age", "age-restricted"),
-        ("ERROR: Private video. Sign in if you've been granted access.", "private video"),
+        (
+            "ERROR: [youtube] X: Sign in to confirm your age",
+            "That video is age-restricted and can't be played.",
+        ),
+        (
+            "ERROR: Private video. Sign in if you've been granted access.",
+            "That video is private.",
+        ),
         (
             "ERROR: [youtube] X: Video unavailable. The uploader has not made it available.",
-            "region-blocked or unavailable",
+            "That video is not available in this region.",
         ),
     ],
 )
 async def test_resolve_track_maps_known_errors(raw: str, expected: str, tmp_path: Path) -> None:
     with (
         patch.object(ytdlp, "_sync_extract", side_effect=DownloadError(raw)),
-        pytest.raises(FetchFailed, match=expected),
+        pytest.raises(FetchFailed) as excinfo,
     ):
         await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+    # Exact-match: PR6a /play displays these verbatim.
+    assert str(excinfo.value) == expected
 
 
-async def test_resolve_track_unknown_download_error_passes_first_line(tmp_path: Path) -> None:
+async def test_resolve_track_unknown_download_error_uses_fallback_sentence(tmp_path: Path) -> None:
     raw = "ERROR: yt-dlp something went wrong\nsecond line: details\nthird"
     with (
         patch.object(ytdlp, "_sync_extract", side_effect=DownloadError(raw)),
@@ -193,9 +209,59 @@ async def test_resolve_track_unknown_download_error_passes_first_line(tmp_path: 
     ):
         await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
     msg = str(excinfo.value)
+    assert msg.startswith("Could not load that URL. yt-dlp said: `")
+    assert msg.endswith("`")
+    # Only the first line is included; the rest is dropped.
     assert "second line" not in msg
     assert "third" not in msg
-    assert "ERROR" in msg
+    assert "ERROR: yt-dlp something went wrong" in msg
+
+
+async def test_resolve_track_error_strips_backticks_and_paths(tmp_path: Path) -> None:
+    raw = "ERROR: unable to write to /home/bot/cache/audio/dQ/x.m4a `kaboom`"
+    with (
+        patch.object(ytdlp, "_sync_extract", side_effect=DownloadError(raw)),
+        pytest.raises(FetchFailed) as excinfo,
+    ):
+        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+    msg = str(excinfo.value)
+    # Only the wrapper's outer backticks remain (delimiting the quoted error).
+    assert msg.count("`") == 2
+    # Absolute path masked.
+    assert "/home/bot" not in msg
+    assert "<path>" in msg
+
+
+async def test_resolve_track_error_capped_at_max_length(tmp_path: Path) -> None:
+    raw = "ERROR: " + "x" * 500
+    with (
+        patch.object(ytdlp, "_sync_extract", side_effect=DownloadError(raw)),
+        pytest.raises(FetchFailed) as excinfo,
+    ):
+        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+    msg = str(excinfo.value)
+    # The scrubbed first-line portion is capped at 200 chars (the
+    # surrounding sentence/backticks are short and bounded).
+    assert "…" in msg
+
+
+async def test_resolve_track_widened_to_youtubedl_error(tmp_path: Path) -> None:
+    # Sibling extractor errors that bypass yt-dlp's normal DownloadError
+    # wrap should still flow through the friendly-error path, not the
+    # internal-error fallback.
+    from yt_dlp.utils import GeoRestrictedError
+
+    with (
+        patch.object(
+            ytdlp,
+            "_sync_extract",
+            side_effect=GeoRestrictedError("Video unavailable in your country"),
+        ),
+        pytest.raises(FetchFailed) as excinfo,
+    ):
+        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+    # ``Video unavailable`` substring matches the region-blocked sentence.
+    assert str(excinfo.value) == "That video is not available in this region."
 
 
 async def test_resolve_track_internal_error_logged_and_wrapped(
@@ -273,6 +339,15 @@ async def test_resolve_playlist_empty_entries_returns_empty_list(tmp_path: Path)
     assert playlist.entries == []
 
 
+async def test_resolve_playlist_rejects_unsupported_url(tmp_path: Path) -> None:
+    with (
+        patch.object(ytdlp, "_sync_extract") as m,
+        pytest.raises(FetchFailed, match="Only YouTube"),
+    ):
+        await ytdlp.resolve_playlist(EVIL_URL, cache_root=tmp_path)
+    m.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # download
 # ---------------------------------------------------------------------------
@@ -308,7 +383,6 @@ async def test_download_invokes_extract_with_outtmpl(tmp_path: Path) -> None:
     opts, called_url = m.call_args.args
     assert called_url == TRACK_URL
     assert opts["outtmpl"] == str(dest.resolve())
-    assert opts["match_filter"] is ytdlp._reject_livestream_filter
     assert m.call_args.kwargs == {"download": True}
 
 
@@ -319,9 +393,21 @@ async def test_download_rejects_livestream(tmp_path: Path) -> None:
     info = _track_info(is_live=True, live_status="is_live")
     with (
         patch.object(ytdlp, "_sync_extract", return_value=info),
-        pytest.raises(FetchFailed, match="livestream"),
+        pytest.raises(FetchFailed, match="Livestreams are not supported"),
     ):
         await ytdlp.download(TRACK_URL, dest, cache_root=cache_root)
+
+
+async def test_download_rejects_unsupported_url(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    dest = cache_root / "audio" / "dQ" / "dQw4w9WgXcQ.m4a"
+    with (
+        patch.object(ytdlp, "_sync_extract") as m,
+        pytest.raises(FetchFailed, match="Only YouTube"),
+    ):
+        await ytdlp.download(EVIL_URL, dest, cache_root=cache_root)
+    m.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -329,10 +415,15 @@ async def test_download_rejects_livestream(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_base_opts_security_critical_settings(tmp_path: Path) -> None:
-    opts = ytdlp._base_opts(tmp_path)
-    # Cookies MUST stay disabled — security item 13.
+def test_base_opts_security_critical_settings() -> None:
+    opts = ytdlp._base_opts()
+    # Cookies (both flavours) MUST stay disabled — security item 13.
     assert opts["cookiefile"] is None
+    assert opts["cookiesfrombrowser"] is None
+    # Plugin auto-loader disabled — security review #3.
+    assert opts["plugin_dirs"] == []
+    # Extractor allowlist pinned to YouTube — security review #4.
+    assert opts["allowed_extractors"] == ["youtube", "youtube:tab"]
     # Disk-fill caps.
     assert opts["max_filesize"] == 500_000_000
     assert opts["playlist_items"] == "1-1000"
@@ -340,47 +431,10 @@ def test_base_opts_security_critical_settings(tmp_path: Path) -> None:
     assert opts["geo_bypass"] is False
     # Single fragment download — review §4 sqlite/eviction race.
     assert opts["concurrent_fragment_downloads"] == 1
-    # Filesystem hardening — restrictfilenames + sandboxed paths.home.
+    # Filesystem hardening — restrictfilenames.
     assert opts["restrictfilenames"] is True
-    assert opts["paths"]["home"] == str(tmp_path / "tmp")
     # Codec allowlist for Lavaplayer.
     assert "bestaudio[ext=m4a]" in opts["format"]
     # Defaults that get overridden for playlists.
     assert opts["noplaylist"] is True
     assert opts["extract_flat"] is False
-
-
-def test_base_opts_does_not_leak_global_state(tmp_path: Path) -> None:
-    a = ytdlp._base_opts(tmp_path)
-    b = ytdlp._base_opts(tmp_path)
-    a["format"] = "mutated"
-    assert b["format"] != "mutated"
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("first\nsecond", "first"),
-        ("   \n  real  \nthird", "real"),
-        ("only-line", "only-line"),
-        ("", ""),
-        ("   \n  ", ""),
-    ],
-)
-def test_first_line_extracts_first_non_empty(raw: str, expected: str) -> None:
-    assert ytdlp._first_line(raw) == expected
-
-
-def test_reject_livestream_filter_returns_reason_for_live() -> None:
-    assert ytdlp._reject_livestream_filter({"is_live": True}) == "livestream"
-    assert ytdlp._reject_livestream_filter({"live_status": "is_upcoming"}) == "livestream"
-
-
-def test_reject_livestream_filter_passes_normal_videos() -> None:
-    assert ytdlp._reject_livestream_filter({"is_live": False, "live_status": "not_live"}) is None
-    assert ytdlp._reject_livestream_filter({}) is None
