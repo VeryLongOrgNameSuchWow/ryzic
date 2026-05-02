@@ -1,0 +1,43 @@
+name: Dependabot auto-merge
+
+# Auto-approves and enables auto-merge (squash) for non-major Dependabot PRs.
+# Major bumps are left for manual review.
+#
+# The repo ruleset on `main` requires squash-only merges + status checks pass,
+# so `gh pr merge --auto --squash` queues the PR and GitHub completes the
+# merge once CI is green. Repo settings already have allow_auto_merge: true
+# and delete_branch_on_merge: true, so no further cleanup is needed.
+#
+# Uses the default GITHUB_TOKEN (sufficient for self-PR actions); no App
+# token needed since this workflow does not need to fire downstream workflows
+# the way release-please does.
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Approve non-major bumps
+        if: ${{ steps.metadata.outputs.update-type != 'version-update:semver-major' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr review --approve "$PR_URL"
+
+      - name: Enable auto-merge for non-major bumps
+        if: ${{ steps.metadata.outputs.update-type != 'version-update:semver-major' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
