@@ -1,0 +1,97 @@
+name: Release
+
+# Builds and publishes a Docker image to GHCR on every `vX.Y.Z` tag.
+#
+# The tag is created by release-please-action when the release PR merges
+# (see `release-please.yml`). The release-please workflow uses an App token
+# specifically so its tag push fires this workflow — `GITHUB_TOKEN`-created
+# tags would silently skip it (GitHub anti-loop rule).
+#
+# Manual dispatch is the escape hatch when a tag was created some other way
+# (manual `git tag`, recovery flow). Run from the GitHub Actions UI or:
+#   gh workflow run release.yml --ref main -f tag=v0.X.Y
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build + publish (e.g. v0.X.Y). Required."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # On `push: tags`, github.ref is the tag and the default checkout
+          # is fine. On `workflow_dispatch`, github.ref is the dispatching
+          # branch — pivot to the input tag so the build matches the right
+          # version.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generates the `:vX.Y.Z`, `:vX.Y`, and `:latest` tags from the git tag.
+      - id: meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf  # v6.0.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Release notes are owned by release-please (see release-please.yml).
+      # By the time this tag fires, the GitHub Release already exists with
+      # curated notes from the merged release PR. softprops just attaches
+      # the image-digest reference to the body so users can copy a digest-
+      # pinned `docker pull` command.
+      - name: Append image digest to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          IMAGE_DIGEST: ${{ steps.meta.outputs.digest }}
+        run: |
+          tag="${DISPATCH_TAG:-${GITHUB_REF#refs/tags/}}"
+          # Only append if the release exists. Skip silently otherwise (manual
+          # tag flows may not have a release yet).
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "::notice::No release found for $tag; skipping digest append."
+            exit 0
+          fi
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "**Container image** (digest-pinnable):"
+            echo ""
+            echo "    docker pull ghcr.io/${GITHUB_REPOSITORY}:${tag#v}"
+            echo "    # or by digest:"
+            echo "    docker pull ghcr.io/${GITHUB_REPOSITORY}@${IMAGE_DIGEST:-<digest unavailable>}"
+          } >> /tmp/digest-section.md
+          gh release view "$tag" --json body --jq .body > /tmp/existing-body.md
+          cat /tmp/existing-body.md /tmp/digest-section.md > /tmp/new-body.md
+          gh release edit "$tag" --notes-file /tmp/new-body.md
