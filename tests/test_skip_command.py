@@ -11,9 +11,8 @@ from typing import Any, cast
 
 import pytest
 
-from ryzic import lavalink_glue, ux
+from ryzic import lavalink_glue
 from ryzic.commands import skip as skip_module
-from ryzic.ytdlp import TrackInfo
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeBot,
@@ -21,6 +20,7 @@ from tests._command_helpers import (
     both_in_voice,
     context_for,
     install_lavalink_client,
+    make_track_with_info,
 )
 
 
@@ -28,22 +28,6 @@ from tests._command_helpers import (
 def _reset_state() -> None:
     lavalink_glue._reset_state_for_test()
     install_lavalink_client(None)
-
-
-def _track_info(title: str = "Test Song") -> TrackInfo:
-    return TrackInfo(
-        video_id="dQw4w9WgXcQ",
-        url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        title=title,
-        uploader="Tester",
-        duration_ms=180_000,
-    )
-
-
-def _track_with_info(title: str = "Test Song") -> FakeAudioTrack:
-    track = FakeAudioTrack(title=title)
-    ux.attach_track_info(cast(Any, track), _track_info(title=title))
-    return track
 
 
 async def test_voice_precondition_short_circuits() -> None:
@@ -107,8 +91,8 @@ async def test_skip_with_more_in_queue_omits_empty_suffix() -> None:
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
     player.is_connected = True
-    player.current = _track_with_info("Now")
-    player.queue = [_track_with_info("Next")]
+    player.current = make_track_with_info(title="Now")
+    player.queue = [make_track_with_info(title="Next", video_id="aaaaaaaaaaa")]
 
     await skip_module._handle_skip(ctx)
 
@@ -126,7 +110,7 @@ async def test_skip_last_track_appends_queue_empty() -> None:
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
     player.is_connected = True
-    player.current = _track_with_info("Last")
+    player.current = make_track_with_info(title="Last")
     player.queue = []
 
     await skip_module._handle_skip(ctx)
@@ -142,8 +126,8 @@ async def test_skip_escapes_markdown_in_title() -> None:
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
     player.is_connected = True
-    player.current = _track_with_info("**Hostile** [link](http://x)")
-    player.queue = [_track_with_info("Next")]
+    player.current = make_track_with_info(title="**Hostile** [link](http://x)")
+    player.queue = [make_track_with_info(title="Next", video_id="aaaaaaaaaaa")]
 
     await skip_module._handle_skip(ctx)
 
@@ -170,6 +154,63 @@ async def test_skip_falls_back_to_audio_track_title_without_metadata() -> None:
 
     fake = cast(Any, ctx)
     assert "Bare AT Title" in str(fake.responses[0][0])
+
+
+async def test_skip_while_paused_re_pauses_new_track() -> None:
+    """skip-while-paused must keep the next track paused regardless of server defaults."""
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="Now")
+    player.queue = [make_track_with_info(title="Next", video_id="aaaaaaaaaaa")]
+    player.paused = True
+
+    await skip_module._handle_skip(ctx)
+
+    assert player.skip_calls == 1
+    # Re-pause must happen *after* skip lands on the new current track.
+    assert player.set_pause_calls == [True]
+    assert player.paused is True
+
+
+async def test_skip_while_playing_does_not_call_set_pause() -> None:
+    """If the player wasn't paused, /skip must not toggle pause."""
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="Now")
+    player.queue = [make_track_with_info(title="Next", video_id="aaaaaaaaaaa")]
+    player.paused = False
+
+    await skip_module._handle_skip(ctx)
+
+    assert player.skip_calls == 1
+    assert player.set_pause_calls == []
+    assert player.paused is False
+
+
+async def test_skip_while_paused_with_empty_queue_does_not_re_pause() -> None:
+    """No track left after skip ⇒ skip the re-pause (nothing to pause)."""
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="Last")
+    player.queue = []
+    player.paused = True
+
+    await skip_module._handle_skip(ctx)
+
+    assert player.skip_calls == 1
+    assert player.set_pause_calls == []
 
 
 def test_skip_loader_registered() -> None:

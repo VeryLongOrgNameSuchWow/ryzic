@@ -5,10 +5,11 @@ deliberately not ``stop()`` then ``play()`` because the latter races
 into Lavalink.py#153 (see ``lavalink_glue.py`` module docstring).
 
 Per spec, skip-while-paused advances the queue but the new track stays
-paused; the user must ``/resume``. ``DefaultPlayer.skip`` calls
-``play()`` which intentionally leaves ``paused`` alone, so we don't
-need to do anything special here — we only document the behaviour to
-flag the surprising-but-spec'd outcome to readers.
+paused; the user must ``/resume``. We explicitly re-pause after the
+skip so the behaviour does not depend on Lavalink's track-replace
+defaults: ``DefaultPlayer.play`` (which ``skip`` calls) sends an
+``update_player`` body with no ``paused`` field, so whether the new
+track inherits the prior paused state is undocumented server-side.
 """
 
 from __future__ import annotations
@@ -59,7 +60,14 @@ async def _handle_skip(ctx: lightbulb.Context) -> None:
     skipped_info = ux.get_track_info(player.current)
     skipped_title = skipped_info.title if skipped_info is not None else player.current.title
 
+    was_paused = player.paused
     await player.skip()
+    # Defensive re-pause: ``DefaultPlayer.play`` does not include a
+    # ``paused`` field on the track-replace, so server-side behaviour
+    # is undocumented. Force the spec'd UX (skip-while-paused stays
+    # paused; user must /resume) regardless of what the server picks.
+    if was_paused and player.current is not None:
+        await player.set_pause(True)
 
     safe_title = ux.safe_truncate(ux.escape_markdown(skipped_title), 256)
     message = f"Skipped **{safe_title}**."

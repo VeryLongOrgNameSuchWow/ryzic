@@ -15,13 +15,14 @@ import pytest
 
 from ryzic import lavalink_glue, ux
 from ryzic.commands import queue as queue_module
-from ryzic.ytdlp import TrackInfo
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeBot,
     FakeLavalinkClient,
     context_for,
     install_lavalink_client,
+    make_track_info,
+    make_track_with_info,
 )
 
 
@@ -29,28 +30,6 @@ from tests._command_helpers import (
 def _reset_state() -> None:
     lavalink_glue._reset_state_for_test()
     install_lavalink_client(None)
-
-
-def _track_info(
-    *,
-    video_id: str = "dQw4w9WgXcQ",
-    title: str = "Test Song",
-    duration_ms: int = 180_000,
-    url: str | None = None,
-) -> TrackInfo:
-    return TrackInfo(
-        video_id=video_id,
-        url=url or f"https://www.youtube.com/watch?v={video_id}",
-        title=title,
-        uploader="Tester",
-        duration_ms=duration_ms,
-    )
-
-
-def _track_with_info(info: TrackInfo, *, requester: int = 222) -> FakeAudioTrack:
-    track = FakeAudioTrack(title=info.title, requester=requester)
-    ux.attach_track_info(cast(Any, track), info)
-    return track
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +111,9 @@ async def test_command_responds_with_embed_when_playing() -> None:
     ll = FakeLavalinkClient()
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
-    player.current = _track_with_info(_track_info(title="Now"))
+    player.current = make_track_with_info(make_track_info(title="Now"))
     player.position = 60_000
-    player.queue = [_track_with_info(_track_info(video_id="aaaaaaaaaaa", title="Next"))]
+    player.queue = [make_track_with_info(make_track_info(video_id="aaaaaaaaaaa", title="Next"))]
 
     await queue_module._handle_queue(ctx)
 
@@ -151,9 +130,9 @@ async def test_queued_tracks_without_metadata_are_silently_skipped() -> None:
     ll = FakeLavalinkClient()
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
-    player.current = _track_with_info(_track_info(title="Now"))
+    player.current = make_track_with_info(make_track_info(title="Now"))
     player.queue = [
-        _track_with_info(_track_info(video_id="aaaaaaaaaaa", title="Has-info")),
+        make_track_with_info(make_track_info(video_id="aaaaaaaaaaa", title="Has-info")),
         FakeAudioTrack(title="No-info"),
     ]
 
@@ -174,12 +153,12 @@ async def test_queued_tracks_without_metadata_are_silently_skipped() -> None:
 def test_embed_title_counts_only_queued_tracks() -> None:
     """The title reports the queued count + queued total — not now-playing."""
     embed = ux.build_queue_embed(
-        now_playing=_track_info(title="Now", duration_ms=300_000),
+        now_playing=make_track_info(title="Now", duration_ms=300_000),
         now_playing_position_ms=60_000,
         paused=False,
         queue=[
-            (_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=180_000), 222),
-            (_track_info(video_id="bbbbbbbbbbb", title="B", duration_ms=120_000), 333),
+            (make_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=180_000), 222),
+            (make_track_info(video_id="bbbbbbbbbbb", title="B", duration_ms=120_000), 333),
         ],
     )
     # 2 queued tracks; 180+120 = 300_000 ms = 5:00.
@@ -188,7 +167,7 @@ def test_embed_title_counts_only_queued_tracks() -> None:
 
 def test_embed_now_playing_field_shows_progress_and_link() -> None:
     embed = ux.build_queue_embed(
-        now_playing=_track_info(title="Now", duration_ms=180_000),
+        now_playing=make_track_info(title="Now", duration_ms=180_000),
         now_playing_position_ms=60_000,
         paused=False,
         queue=[],
@@ -202,7 +181,7 @@ def test_embed_now_playing_field_shows_progress_and_link() -> None:
 
 def test_embed_now_playing_field_appends_paused() -> None:
     embed = ux.build_queue_embed(
-        now_playing=_track_info(title="Now", duration_ms=180_000),
+        now_playing=make_track_info(title="Now", duration_ms=180_000),
         now_playing_position_ms=60_000,
         paused=True,
         queue=[],
@@ -213,7 +192,7 @@ def test_embed_now_playing_field_appends_paused() -> None:
 
 def test_embed_description_is_empty_when_queue_empty() -> None:
     embed = ux.build_queue_embed(
-        now_playing=_track_info(title="Now"),
+        now_playing=make_track_info(title="Now"),
         now_playing_position_ms=0,
         paused=False,
         queue=[],
@@ -223,12 +202,12 @@ def test_embed_description_is_empty_when_queue_empty() -> None:
 
 def test_embed_description_lists_queued_entries_with_requester_mention() -> None:
     embed = ux.build_queue_embed(
-        now_playing=_track_info(title="Now"),
+        now_playing=make_track_info(title="Now"),
         now_playing_position_ms=0,
         paused=False,
         queue=[
-            (_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=60_000), 222),
-            (_track_info(video_id="bbbbbbbbbbb", title="B", duration_ms=120_000), 333),
+            (make_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=60_000), 222),
+            (make_track_info(video_id="bbbbbbbbbbb", title="B", duration_ms=120_000), 333),
         ],
     )
     body = embed.description or ""
@@ -239,11 +218,11 @@ def test_embed_description_lists_queued_entries_with_requester_mention() -> None
 def test_embed_description_collapses_overflow_beyond_ten() -> None:
     """Beyond the first 10 entries the description appends an "… and N more" line."""
     queue = [
-        (_track_info(video_id=f"vid_{i:07d}", title=f"T{i}", duration_ms=60_000), 222)
+        (make_track_info(video_id=f"vid_{i:07d}", title=f"T{i}", duration_ms=60_000), 222)
         for i in range(15)
     ]
     embed = ux.build_queue_embed(
-        now_playing=_track_info(title="Now"),
+        now_playing=make_track_info(title="Now"),
         now_playing_position_ms=0,
         paused=False,
         queue=queue,
@@ -257,12 +236,12 @@ def test_embed_description_collapses_overflow_beyond_ten() -> None:
 
 def test_embed_description_escapes_markdown_in_titles() -> None:
     embed = ux.build_queue_embed(
-        now_playing=_track_info(title="Now"),
+        now_playing=make_track_info(title="Now"),
         now_playing_position_ms=0,
         paused=False,
         queue=[
             (
-                _track_info(video_id="aaaaaaaaaaa", title="**hostile**", duration_ms=60_000),
+                make_track_info(video_id="aaaaaaaaaaa", title="**hostile**", duration_ms=60_000),
                 222,
             ),
         ],

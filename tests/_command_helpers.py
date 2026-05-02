@@ -21,7 +21,8 @@ from typing import Any, cast
 import lavalink
 import lightbulb
 
-from ryzic import lavalink_glue
+from ryzic import lavalink_glue, ux
+from ryzic.ytdlp import TrackInfo
 
 
 @dataclass
@@ -181,3 +182,39 @@ def both_in_voice(
 def context_for(bot: FakeBot, **kwargs: Any) -> lightbulb.Context:
     """Wrap :class:`FakeContext` in a ``lightbulb.Context`` cast for ty."""
     return cast(lightbulb.Context, FakeContext(bot, **kwargs))
+
+
+def make_track_info(
+    *,
+    video_id: str = "dQw4w9WgXcQ",
+    title: str = "Test Song",
+    uploader: str = "Tester",
+    duration_ms: int = 180_000,
+    url: str | None = None,
+) -> TrackInfo:
+    """Build a :class:`TrackInfo` with realistic defaults for command tests."""
+    return TrackInfo(
+        video_id=video_id,
+        url=url or f"https://www.youtube.com/watch?v={video_id}",
+        title=title,
+        uploader=uploader,
+        duration_ms=duration_ms,
+    )
+
+
+def make_track_with_info(
+    info: TrackInfo | None = None,
+    *,
+    requester: int = 222,
+    **info_overrides: Any,
+) -> FakeAudioTrack:
+    """Build a :class:`FakeAudioTrack` with an attached :class:`TrackInfo`.
+
+    Pass ``info`` to attach an existing instance, or pass keyword args
+    forwarded to :func:`make_track_info` to construct one inline.
+    """
+    if info is None:
+        info = make_track_info(**info_overrides)
+    track = FakeAudioTrack(title=info.title, requester=requester)
+    ux.attach_track_info(cast(Any, track), info)
+    return track

@@ -56,9 +56,7 @@ _ELLIPSIS: Final = "…"
 # collapse to a single "… and N more" line per M1 §3.
 _QUEUE_PREVIEW_MAX: Final = 10
 
-# Key used to stash the original :class:`TrackInfo` on
-# :attr:`lavalink.AudioTrack.extra`. Namespaced so a future plugin
-# stashing ``track_info`` cannot collide with us.
+# Namespaced ``AudioTrack.extra`` key for the stashed :class:`TrackInfo`.
 _TRACK_INFO_EXTRA_KEY: Final = "ryzic_track_info"
 
 
