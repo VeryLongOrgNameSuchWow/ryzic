@@ -1,0 +1,23 @@
+name: Chore / refactor
+description: Tooling, dependency, refactor, or housekeeping that doesn't change user-visible behavior
+labels: ["type:chore"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What to do
+      description: Concrete change. Files touched, deps added/removed, behavior preserved.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What does this enable? Reduce maintenance burden? Unblock something?
+    validations:
+      required: true
+  - type: input
+    id: loc-delta
+    attributes:
+      label: Estimated LOC delta
+      placeholder: "−40 src + −15 tests = −55 net"

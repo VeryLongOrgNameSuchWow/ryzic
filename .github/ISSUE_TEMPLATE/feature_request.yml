@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a new command, behavior, or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you want
+      description: One paragraph. What changes about the bot from a user's perspective?
+      placeholder: "Add a /shuffle command that randomizes the current queue order."
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why
+      description: What problem does this solve? Who asked for it?
+    validations:
+      required: true
+  - type: textarea
+    id: ux-sketch
+    attributes:
+      label: UX sketch
+      description: Concrete success and error messages, edge cases, command parameters.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you think about? Why this one?
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - One small command
+        - New subsystem
+        - Workflow/process change
+        - Other
+    validations:
+      required: true
