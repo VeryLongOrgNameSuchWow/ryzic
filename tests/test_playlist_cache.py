@@ -40,16 +40,12 @@ def _playlist(playlist_id: str = PLIST_ID, n_tracks: int = 2) -> PlaylistInfo:
     return PlaylistInfo(playlist_id=playlist_id, title="Test playlist", entries=entries)
 
 
-# ---------------------------------------------------------------------------
-# Round-trip: write then read returns equal payload
-# ---------------------------------------------------------------------------
-
-
 async def test_round_trip_preserves_playlist(tmp_path: Path) -> None:
     info = _playlist()
     await playlist_cache.write(PLIST_ID, info, tmp_path)
     loaded = await playlist_cache.read(PLIST_ID, tmp_path)
-    assert loaded == info
+    assert loaded is not None
+    assert loaded[0] == info
 
 
 async def test_round_trip_preserves_unicode(tmp_path: Path) -> None:
@@ -60,7 +56,8 @@ async def test_round_trip_preserves_unicode(tmp_path: Path) -> None:
     )
     await playlist_cache.write(PLIST_ID, info, tmp_path)
     loaded = await playlist_cache.read(PLIST_ID, tmp_path)
-    assert loaded == info
+    assert loaded is not None
+    assert loaded[0] == info
 
 
 async def test_read_missing_returns_none(tmp_path: Path) -> None:
@@ -81,6 +78,28 @@ async def test_read_structurally_invalid_returns_none(tmp_path: Path) -> None:
     assert await playlist_cache.read(PLIST_ID, tmp_path) is None
 
 
+async def test_read_missing_fetched_at_returns_none(tmp_path: Path) -> None:
+    # ``fetched_at`` lives outside the dataclass; without it the file is
+    # an unusable cache entry (no way to compute staleness).
+    path = tmp_path / "playlists" / f"{PLIST_ID}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"playlist_id": PLIST_ID, "title": "t", "entries": []}),
+        encoding="utf-8",
+    )
+    assert await playlist_cache.read(PLIST_ID, tmp_path) is None
+
+
+async def test_read_returns_persisted_fetched_at(tmp_path: Path) -> None:
+    persisted = await playlist_cache.write(
+        PLIST_ID, _playlist(), tmp_path, fetched_at=1_700_000_000
+    )
+    loaded = await playlist_cache.read(PLIST_ID, tmp_path)
+    assert loaded is not None
+    assert loaded[1] == 1_700_000_000
+    assert persisted == 1_700_000_000
+
+
 async def test_write_creates_playlists_directory(tmp_path: Path) -> None:
     assert not (tmp_path / "playlists").exists()
     await playlist_cache.write(PLIST_ID, _playlist(), tmp_path)
@@ -92,7 +111,7 @@ async def test_write_atomic_replaces_existing_entry(tmp_path: Path) -> None:
     await playlist_cache.write(PLIST_ID, _playlist(n_tracks=3), tmp_path)
     loaded = await playlist_cache.read(PLIST_ID, tmp_path)
     assert loaded is not None
-    assert len(loaded.entries) == 3
+    assert len(loaded[0].entries) == 3
 
 
 async def test_write_rejects_mismatched_playlist_id(tmp_path: Path) -> None:
@@ -110,11 +129,6 @@ async def test_write_persists_fetched_at_as_int(tmp_path: Path) -> None:
     assert before <= payload["fetched_at"] <= after
 
 
-# ---------------------------------------------------------------------------
-# playlist_id validation: regex + path-traversal rejection
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "playlist_id",
     [
@@ -127,7 +141,9 @@ async def test_write_persists_fetched_at_as_int(tmp_path: Path) -> None:
 async def test_validate_accepts_valid(playlist_id: str, tmp_path: Path) -> None:
     info = PlaylistInfo(playlist_id=playlist_id, title="t", entries=[])
     await playlist_cache.write(playlist_id, info, tmp_path)
-    assert await playlist_cache.read(playlist_id, tmp_path) == info
+    loaded = await playlist_cache.read(playlist_id, tmp_path)
+    assert loaded is not None
+    assert loaded[0] == info
 
 
 @pytest.mark.parametrize(
@@ -189,101 +205,54 @@ async def test_extract_playlist_id_picks_first_when_list_param_repeats() -> None
     assert playlist_cache._extract_playlist_id(first_good) == PLIST_ID
 
 
-def _write_with_fetched_at(tmp_path: Path, fetched_at: int) -> PlaylistInfo:
-    info = _playlist()
-    payload = {
-        "playlist_id": info.playlist_id,
-        "title": info.title,
-        "fetched_at": fetched_at,
-        "entries": [
-            {
-                "video_id": e.video_id,
-                "url": e.url,
-                "title": e.title,
-                "uploader": e.uploader,
-                "duration_ms": e.duration_ms,
-            }
-            for e in info.entries
-        ],
-    }
-    path = tmp_path / "playlists" / f"{info.playlist_id}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return info
-
-
-def test_is_stale_just_under_24h_is_fresh(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("offset_seconds", "expected_stale"),
+    [
+        (24 * 60 * 60 - 1, False),  # 23h59m59s — fresh
+        (24 * 60 * 60, False),  # exactly 24h — boundary is strict ``>``
+        (24 * 60 * 60 + 1, True),  # 24h00m01s — stale
+    ],
+)
+def test_is_stale_boundary(offset_seconds: int, expected_stale: bool) -> None:
     now = 1_700_000_000
-    fetched_at = now - (24 * 60 * 60 - 1)  # 23h59m59s old
-    info = _write_with_fetched_at(tmp_path, fetched_at)
     with patch.object(playlist_cache.time, "time", return_value=now):
-        assert playlist_cache.is_stale(info, cache_root=tmp_path) is False
-
-
-def test_is_stale_exactly_24h_is_fresh(tmp_path: Path) -> None:
-    # Boundary is strict ``>``: exactly 24h old is still fresh.
-    now = 1_700_000_000
-    fetched_at = now - 24 * 60 * 60
-    info = _write_with_fetched_at(tmp_path, fetched_at)
-    with patch.object(playlist_cache.time, "time", return_value=now):
-        assert playlist_cache.is_stale(info, cache_root=tmp_path) is False
-
-
-def test_is_stale_just_over_24h_is_stale(tmp_path: Path) -> None:
-    now = 1_700_000_000
-    fetched_at = now - (24 * 60 * 60 + 1)  # 24h00m01s old
-    info = _write_with_fetched_at(tmp_path, fetched_at)
-    with patch.object(playlist_cache.time, "time", return_value=now):
-        assert playlist_cache.is_stale(info, cache_root=tmp_path) is True
-
-
-def test_is_stale_missing_file_is_stale(tmp_path: Path) -> None:
-    info = _playlist()
-    assert playlist_cache.is_stale(info, cache_root=tmp_path) is True
-
-
-def test_is_stale_missing_fetched_at_is_stale(tmp_path: Path) -> None:
-    path = tmp_path / "playlists" / f"{PLIST_ID}.json"
-    path.parent.mkdir(parents=True)
-    path.write_text(
-        json.dumps({"playlist_id": PLIST_ID, "title": "t", "entries": []}),
-        encoding="utf-8",
-    )
-    assert playlist_cache.is_stale(_playlist(), cache_root=tmp_path) is True
-
-
-# ---------------------------------------------------------------------------
-# fetch_with_fallback: live-first, cache-on-failure
-# ---------------------------------------------------------------------------
+        assert playlist_cache.is_stale(now - offset_seconds) is expected_stale
 
 
 async def test_fetch_with_fallback_live_success_writes_cache(tmp_path: Path) -> None:
     info = _playlist()
+    before = int(time.time())
     with patch.object(playlist_cache, "resolve_playlist", return_value=info) as m:
-        result, used_cache = await playlist_cache.fetch_with_fallback(
+        result, fetched_at, used_cache = await playlist_cache.fetch_with_fallback(
             PLIST_URL, cache_root=tmp_path
         )
+    after = int(time.time())
     assert result == info
     assert used_cache is False
+    assert before <= fetched_at <= after
     m.assert_awaited_once_with(PLIST_URL, cache_root=tmp_path)
-    # Cache populated as a side effect.
+    # Cache populated as a side effect, with the same timestamp.
     cached = await playlist_cache.read(PLIST_ID, tmp_path)
-    assert cached == info
+    assert cached is not None
+    assert cached == (info, fetched_at)
 
 
 async def test_fetch_with_fallback_uses_cache_on_yt_dlp_failure(tmp_path: Path) -> None:
     cached_info = _playlist(n_tracks=3)
-    await playlist_cache.write(PLIST_ID, cached_info, tmp_path)
+    persisted_at = await playlist_cache.write(
+        PLIST_ID, cached_info, tmp_path, fetched_at=1_700_000_000
+    )
 
     with patch.object(
         playlist_cache,
         "resolve_playlist",
         side_effect=FetchFailed("yt-dlp exploded"),
     ) as m:
-        result, used_cache = await playlist_cache.fetch_with_fallback(
+        result, fetched_at, used_cache = await playlist_cache.fetch_with_fallback(
             PLIST_URL, cache_root=tmp_path
         )
     assert result == cached_info
+    assert fetched_at == persisted_at
     assert used_cache is True
     m.assert_awaited_once()
 
@@ -295,20 +264,17 @@ async def test_fetch_with_fallback_returns_stale_cache_unconditionally(
     # ancient ones; the bool flag + ``is_stale`` drive the embed
     # warning, not the fallback decision.
     cached = _playlist(n_tracks=2)
-    await playlist_cache.write(PLIST_ID, cached, tmp_path)
-    # Backdate the on-disk fetched_at to a week ago.
-    path = tmp_path / "playlists" / f"{PLIST_ID}.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["fetched_at"] = int(time.time()) - 7 * 24 * 60 * 60
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    week_old = int(time.time()) - 7 * 24 * 60 * 60
+    await playlist_cache.write(PLIST_ID, cached, tmp_path, fetched_at=week_old)
 
     with patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("down")):
-        result, used_cache = await playlist_cache.fetch_with_fallback(
+        result, fetched_at, used_cache = await playlist_cache.fetch_with_fallback(
             PLIST_URL, cache_root=tmp_path
         )
     assert result == cached
     assert used_cache is True
-    assert playlist_cache.is_stale(result, cache_root=tmp_path) is True
+    assert fetched_at == week_old
+    assert playlist_cache.is_stale(fetched_at) is True
 
 
 async def test_fetch_with_fallback_reraises_when_no_cache(tmp_path: Path) -> None:
@@ -321,11 +287,33 @@ async def test_fetch_with_fallback_reraises_when_no_cache(tmp_path: Path) -> Non
     assert excinfo.value is original
 
 
-async def test_fetch_with_fallback_reraises_when_url_has_no_list_param(
+@pytest.mark.parametrize(
+    "url",
+    [
+        # No ``list=`` at all — even an unrelated cache file shouldn't
+        # produce a fallback. Pre-population is asserted in a separate
+        # test; here the bare-URL path is enough.
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        # Adversarial ``list=`` value that fails the regex; must NOT be
+        # used to compose a path — even for a read.
+        "https://www.youtube.com/playlist?list=../../etc",
+    ],
+)
+async def test_fetch_with_fallback_reraises_when_no_extractable_id(
+    tmp_path: Path, url: str
+) -> None:
+    with (
+        patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("x")),
+        pytest.raises(FetchFailed),
+    ):
+        await playlist_cache.fetch_with_fallback(url, cache_root=tmp_path)
+
+
+async def test_fetch_with_fallback_no_list_param_ignores_unrelated_cache(
     tmp_path: Path,
 ) -> None:
-    # Without ``list=``, we can't derive a playlist_id to look up — so
-    # there's no fallback path, even if some unrelated cache file exists.
+    # Negative control: an unrelated cache file MUST NOT be served when
+    # the URL itself has no ``list=`` to derive a playlist_id from.
     await playlist_cache.write(PLIST_ID, _playlist(), tmp_path)
     no_list = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     with (
@@ -333,19 +321,6 @@ async def test_fetch_with_fallback_reraises_when_url_has_no_list_param(
         pytest.raises(FetchFailed),
     ):
         await playlist_cache.fetch_with_fallback(no_list, cache_root=tmp_path)
-
-
-async def test_fetch_with_fallback_reraises_when_list_param_invalid(
-    tmp_path: Path,
-) -> None:
-    # Adversarial ``list=`` values that fail the regex must NOT be used
-    # to compose a path — even for a read.
-    bad_url = "https://www.youtube.com/playlist?list=../../etc"
-    with (
-        patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("x")),
-        pytest.raises(FetchFailed),
-    ):
-        await playlist_cache.fetch_with_fallback(bad_url, cache_root=tmp_path)
 
 
 async def test_fetch_with_fallback_propagates_unexpected_exceptions(

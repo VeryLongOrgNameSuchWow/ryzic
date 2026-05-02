@@ -119,11 +119,13 @@ def _write_sync(path: Path, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-async def read(playlist_id: str, cache_root: Path) -> PlaylistInfo | None:
-    """Return the cached :class:`PlaylistInfo` for ``playlist_id``, or ``None``.
+async def read(playlist_id: str, cache_root: Path) -> tuple[PlaylistInfo, int] | None:
+    """Return the cached ``(info, fetched_at)`` for ``playlist_id``, or ``None``.
 
     Returns ``None`` for misses AND for malformed cache files; the
-    fallback path treats both identically.
+    fallback path treats both identically. Surfacing ``fetched_at``
+    alongside ``info`` lets the caller answer "is this stale?" without a
+    second disk read on the event loop.
     """
     path = _path_for(playlist_id, cache_root)
     try:
@@ -134,47 +136,45 @@ async def read(playlist_id: str, cache_root: Path) -> PlaylistInfo | None:
     if payload is None:
         return None
     try:
-        return _deserialize(payload)
+        info = _deserialize(payload)
     except (ValueError, KeyError, TypeError):
         _log.warning("dropping malformed playlist cache entry: %s", path)
         return None
+    fetched_at = payload.get("fetched_at")
+    if not isinstance(fetched_at, int):
+        _log.warning("dropping malformed playlist cache entry: %s", path)
+        return None
+    return info, fetched_at
 
 
-async def write(playlist_id: str, info: PlaylistInfo, cache_root: Path) -> None:
+async def write(
+    playlist_id: str,
+    info: PlaylistInfo,
+    cache_root: Path,
+    *,
+    fetched_at: int | None = None,
+) -> int:
     """Persist ``info`` to the cache under ``playlist_id``.
 
     The on-disk ``playlist_id`` MUST equal the function arg — the path is
     derived from the arg, so a mismatched payload would cache the wrong
     file name and silently break the next read.
+
+    Returns the timestamp written so callers can pass the same value
+    back to :func:`is_stale` without re-reading the file.
     """
     if info.playlist_id != playlist_id:
         raise InvalidVideoID(f"playlist_id mismatch: arg={playlist_id!r} info={info.playlist_id!r}")
     path = _path_for(playlist_id, cache_root)
-    payload = _serialize(info, fetched_at=int(time.time()))
+    if fetched_at is None:
+        fetched_at = int(time.time())
+    payload = _serialize(info, fetched_at=fetched_at)
     await asyncio.to_thread(_write_sync, path, payload)
+    return fetched_at
 
 
-def is_stale(info: PlaylistInfo, *, cache_root: Path) -> bool:
-    """Return True iff the on-disk cache for ``info`` is older than 24h.
-
-    Reads ``fetched_at`` from disk so the function works on a freshly
-    deserialized :class:`PlaylistInfo` without storing the timestamp on
-    the dataclass itself (the dataclass mirrors yt-dlp's shape — adding
-    a cache-only field would leak that concern outward).
-
-    Returns ``True`` if the file is missing or unreadable: the embed
-    warning is the safer default when staleness can't be proven fresh.
-    """
-    path = _path_for(info.playlist_id, cache_root)
-    try:
-        payload = _read_sync(path)
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return True
-    if payload is None:
-        return True
-    fetched_at = payload.get("fetched_at")
-    if not isinstance(fetched_at, int):
-        return True
+def is_stale(fetched_at: int) -> bool:
+    """Return True iff ``fetched_at`` is older than 24h relative to now."""
     return (time.time() - fetched_at) > _TTL_SECONDS
 
 
@@ -197,12 +197,14 @@ def _extract_playlist_id(url: str) -> str | None:
     return candidate if _PLAYLIST_ID_RE.fullmatch(candidate) else None
 
 
-async def fetch_with_fallback(url: str, *, cache_root: Path) -> tuple[PlaylistInfo, bool]:
+async def fetch_with_fallback(url: str, *, cache_root: Path) -> tuple[PlaylistInfo, int, bool]:
     """Resolve ``url`` live; on failure, fall back to cached metadata.
 
-    Returns ``(info, used_cache_fallback)``. The bool tells callers
-    (e.g. ``/play``) to attach the "offline metadata" footer to the
-    embed; combine with :func:`is_stale` to surface the timestamp.
+    Returns ``(info, fetched_at, used_cache_fallback)``. The bool tells
+    callers (e.g. ``/play``) to attach the "offline metadata" footer;
+    pass ``fetched_at`` to :func:`is_stale` to drive the staleness
+    warning. On a live success ``fetched_at`` is the just-now timestamp
+    persisted to disk.
 
     Raises the original :class:`FetchFailed` if BOTH yt-dlp and the
     cache fail — "unsinkable when yt-dlp breaks" only applies when we
@@ -217,11 +219,12 @@ async def fetch_with_fallback(url: str, *, cache_root: Path) -> tuple[PlaylistIn
         cached = await read(playlist_id, cache_root)
         if cached is None:
             raise
+        cached_info, fetched_at = cached
         _log.warning(
             "yt-dlp failed for playlist %s; serving cached metadata: %s",
             playlist_id,
             exc,
         )
-        return cached, True
-    await write(info.playlist_id, info, cache_root)
-    return info, False
+        return cached_info, fetched_at, True
+    fetched_at = await write(info.playlist_id, info, cache_root)
+    return info, fetched_at, False
