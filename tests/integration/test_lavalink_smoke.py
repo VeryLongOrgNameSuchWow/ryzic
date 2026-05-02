@@ -14,16 +14,14 @@ Opt-in: requires Docker + the network access to pull the image, hence the
 
 from __future__ import annotations
 
-import asyncio
 import shutil
-import time
 from pathlib import Path
 
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from lavalink import Client, LavalinkError, LoadType
+from lavalink import Client, LoadType
 
 pytestmark = pytest.mark.integration
 
@@ -68,15 +66,11 @@ def lavalink_container(tmp_path_factory: pytest.TempPathFactory):
     cache_dir = tmp_path_factory.mktemp("ryzic_cache")
     shutil.copy(FIXTURE, cache_dir / FIXTURE.name)
 
-    # Lavalink runs as uid 322 inside the container. Bind mounts must be
-    # readable (and the plugins dir writable) by that uid; pytest tmpdirs
-    # default to 0700, which silently yields a permission-denied container
-    # crash or an EMPTY load result.
+    # pytest tmpdirs are 0700; Lavalink (uid 322) needs world-read on dirs
+    # and write on plugins/ for its first-boot jar download.
     for d in (config_dir, plugins_dir, cache_dir):
         d.chmod(0o755)
-    (config_dir / "application.yml").chmod(0o644)
-    (cache_dir / FIXTURE.name).chmod(0o644)
-    plugins_dir.chmod(0o777)  # Lavalink needs to drop the downloaded jar here.
+    plugins_dir.chmod(0o777)
 
     # `:Z` is a no-op on Docker hosts without SELinux; on Podman + SELinux
     # (Fedora) it relabels the mount so the in-container lavalink uid can read.
@@ -116,7 +110,7 @@ async def test_lavalink_loads_local_file(lavalink_container) -> None:
             region="us",
             connect=False,
         )
-        result = await _load_with_retry(node, f"{CACHE_PATH_IN_CONTAINER}/{FIXTURE.name}")
+        result = await node.get_tracks(f"{CACHE_PATH_IN_CONTAINER}/{FIXTURE.name}")
     finally:
         await client.close()
 
@@ -124,17 +118,3 @@ async def test_lavalink_loads_local_file(lavalink_container) -> None:
         f"expected TRACK, got {result.load_type!r} (error={result.error!r})"
     )
     assert result.tracks, "Lavalink returned no tracks for local file"
-
-
-async def _load_with_retry(node, query: str, deadline_s: float = 10.0):
-    # `loadtracks` settles a moment after the readiness log line; one short
-    # retry loop covers that race without slowing the happy path.
-    deadline = time.monotonic() + deadline_s
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            return await node.get_tracks(query)
-        except LavalinkError as exc:
-            last_error = exc
-            await asyncio.sleep(0.5)
-    raise AssertionError(f"loadtracks never succeeded within {deadline_s}s: {last_error!r}")
