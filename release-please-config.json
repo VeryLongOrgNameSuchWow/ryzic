@@ -3,11 +3,10 @@
   "release-type": "python",
   "include-component-in-tag": false,
   "include-v-in-tag": true,
-  "bump-minor-pre-major": true,
-  "bump-patch-for-minor-pre-major": true,
   "packages": {
     ".": {
-      "package-name": "ryzic"
+      "package-name": "ryzic",
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }
