@@ -8,7 +8,7 @@ in a test guild before the real UX is built.
 
 from __future__ import annotations
 
-import lavalink
+import hikari
 import lightbulb
 
 from .. import lavalink_glue
@@ -21,13 +21,10 @@ class LLTest(
     lightbulb.SlashCommand,
     name="lltest",
     description="Lavalink wire-up smoke check (removed once /play exists).",
+    default_member_permissions=hikari.Permissions.MANAGE_GUILD,
 ):
     @lightbulb.invoke
     async def invoke(self, ctx: lightbulb.Context) -> None:
-        # Resolve via the module helper rather than DI so we can return a
-        # friendly "not ready" message when ShardReadyEvent has not yet
-        # fired. The DI factory would raise inside the resolver and never
-        # reach this body.
         ll_client = lavalink_glue.get_lavalink_client()
         if ll_client is None:
             await ctx.respond(
@@ -43,12 +40,6 @@ class LLTest(
         nodes = list(ll_client.node_manager.nodes)
         if not nodes:
             await ctx.respond("No Lavalink nodes registered.", ephemeral=True)
-            return
-
-        try:
-            ll_client.player_manager.create(guild_id=ctx.guild_id)
-        except lavalink.ClientError as exc:
-            await ctx.respond(f"Lavalink error: {exc}", ephemeral=True)
             return
 
         lines = [

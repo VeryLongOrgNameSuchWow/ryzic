@@ -10,7 +10,10 @@ before calling ``player.play()``.
 
 State lives at module scope rather than in a ``GuildState`` registry: there
 are only three fields, none cross-reference each other, and an extra layer
-would be pure ceremony.
+would be pure ceremony. Tests must use ``_reset_state_for_test`` /
+``_set_lavalink_client_for_test`` to keep that state from leaking across
+cases — the ``_reset_state`` autouse fixture in ``tests/test_lavalink_bridge``
+is the canonical example.
 
 Subtleties worth knowing about:
 
@@ -28,17 +31,23 @@ Subtleties worth knowing about:
 * ``event.endpoint`` is the hikari property that prepends ``wss://``. We
   strip the scheme with ``removeprefix`` rather than ``[6:]`` so a future
   hikari change to scheme handling cannot silently corrupt the host string.
+
+* PR6a's ``/play`` consumes lavalink via ``get_lavalink_client()`` and treats
+  ``None`` as "Audio service is down. Try again in a minute." (M1 §3). We
+  deliberately do NOT register a lightbulb DI factory: linkd wraps factory
+  exceptions in ``DependencyNotSatisfiableException`` so a typed not-ready
+  exception would never reach the command boundary.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import cast
 
 import hikari
 import lavalink
-import lightbulb
 from lavalink.common import VoiceServerUpdatePayload, VoiceStateUpdatePayload
 
 from . import config
@@ -49,6 +58,15 @@ _log = logging.getLogger(__name__)
 AUTO_LEAVE_SECONDS = 300
 VOICE_READY_TIMEOUT_SECONDS = 5.0
 
+# Defense in depth: only forward voice endpoints that look like Discord's voice
+# infrastructure. Anything else (a hypothetical compromised gateway) is dropped
+# silently with a warning rather than handed to lavalink for connection.
+_DISCORD_ENDPOINT_RE = re.compile(r"^[a-z0-9-]+\.discord\.media(:\d+)?$")
+
+# Strips Discord markdown control chars so server-supplied error text cannot
+# break out of formatting or smuggle pings.
+_MARKDOWN_STRIP_RE = re.compile(r"[`*_~|\[\]]")
+
 
 # Per-guild state. Module-level by design (see module docstring).
 last_play_channel: dict[int, int] = {}
@@ -56,26 +74,18 @@ auto_leave_tasks: dict[int, asyncio.Task[None]] = {}
 _voice_ready_events: dict[int, asyncio.Event] = {}
 
 
-# Singleton lavalink client. Created once on the first ``ShardReadyEvent``
-# (we cannot construct it earlier — it needs the bot's user id). ``None``
-# until then; bridge listeners short-circuit while we wait.
+# Singleton lavalink client. Constructed on the first ``ShardReadyEvent``
+# (needs the bot's user id).
 _ll_client: lavalink.Client | None = None
 
 
 def get_lavalink_client() -> lavalink.Client | None:
     """Return the active lavalink client, or ``None`` before bootstrap.
 
-    Exposed for the lightbulb DI factory and for tests.
+    PR6a's ``/play`` is the primary consumer: ``None`` maps to the
+    "Audio service is down. Try again in a minute." path from M1 §3.
     """
     return _ll_client
-
-
-def _voice_ready_event(guild_id: int) -> asyncio.Event:
-    event = _voice_ready_events.get(guild_id)
-    if event is None:
-        event = asyncio.Event()
-        _voice_ready_events[guild_id] = event
-    return event
 
 
 async def wait_for_voice_ready(guild_id: int, timeout: float = VOICE_READY_TIMEOUT_SECONDS) -> bool:
@@ -86,7 +96,7 @@ async def wait_for_voice_ready(guild_id: int, timeout: float = VOICE_READY_TIMEO
     surface a friendly error" rather than retrying — the gateway timed out,
     not a transient race.
     """
-    event = _voice_ready_event(guild_id)
+    event = _voice_ready_events.setdefault(guild_id, asyncio.Event())
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
     except TimeoutError:
@@ -118,12 +128,12 @@ def _start_auto_leave(bot: hikari.GatewayBot, guild_id: int) -> None:
 
 
 async def _auto_leave(bot: hikari.GatewayBot, guild_id: int) -> None:
-    try:
-        await asyncio.sleep(AUTO_LEAVE_SECONDS)
-    except asyncio.CancelledError:
-        return
+    await asyncio.sleep(AUTO_LEAVE_SECONDS)
 
-    auto_leave_tasks.pop(guild_id, None)
+    # Self-pop is best-effort; a concurrent _cancel_auto_leave / _start_auto_leave
+    # may have already replaced the entry, so only clear ourselves out.
+    if auto_leave_tasks.get(guild_id) is asyncio.current_task():
+        del auto_leave_tasks[guild_id]
 
     client = _ll_client
     if client is None:
@@ -141,29 +151,46 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int) -> None:
     await _send_to_last_play_channel(bot, guild_id, "Idle for 5 minutes — disconnecting.")
 
 
-def _clear_player_queue(player: lavalink.BasePlayer) -> None:
-    """Clear ``player.queue`` if the player exposes one.
-
-    ``BasePlayer`` does not declare a queue; only ``DefaultPlayer`` (which
-    we use) does. Casting the conservatism away keeps the call sites tidy.
-    """
-    queue = getattr(player, "queue", None)
-    if queue is not None:
-        queue.clear()
-
-
 async def _send_to_last_play_channel(bot: hikari.GatewayBot, guild_id: int, content: str) -> None:
     channel_id = last_play_channel.get(guild_id)
     if channel_id is None:
         return
     try:
         await bot.rest.create_message(channel_id, content)
+    except hikari.NotFoundError:
+        # Channel deleted (or bot lost access) — drop the stale mapping so we
+        # stop re-attempting until the next /play repopulates it.
+        last_play_channel.pop(guild_id, None)
+        _log.warning(
+            "last_play_channel %d for guild %d is gone; forgetting it",
+            channel_id,
+            guild_id,
+        )
     except hikari.HikariError:
         _log.warning(
             "could not post to last_play_channel %d for guild %d",
             channel_id,
             guild_id,
         )
+
+
+def _track_title(track: lavalink.AudioTrack | None) -> str:
+    return track.title if track is not None else "<unknown>"
+
+
+def _safe_error_text(text: str | None) -> str:
+    """Sanitise server-supplied error text before posting to a public channel.
+
+    Lavalink's TrackException ``cause``/``message`` strings can include JVM
+    stack traces, server-side filesystem paths, internal hostnames, and
+    signed stream URLs. Strip Discord markdown chars so they cannot escape
+    formatting, take only the first line, cap at 200 chars.
+    """
+    if not text:
+        return "unknown error"
+    cleaned = _MARKDOWN_STRIP_RE.sub("", text)
+    first_line = cleaned.splitlines()[0] if cleaned else ""
+    return first_line[:200] or "unknown error"
 
 
 class EventHandler:
@@ -182,19 +209,15 @@ class EventHandler:
     async def on_track_start(self, event: lavalink.TrackStartEvent) -> None:
         guild_id = event.player.guild_id
         _cancel_auto_leave(guild_id)
-        track = event.track
-        title = track.title if track is not None else "<unknown>"
-        _log.info("guild=%d track-start title=%r", guild_id, title)
+        _log.info("guild=%d track-start title=%r", guild_id, _track_title(event.track))
 
     @lavalink.listener(lavalink.TrackEndEvent)
     async def on_track_end(self, event: lavalink.TrackEndEvent) -> None:
         guild_id = event.player.guild_id
-        track = event.track
-        title = track.title if track is not None else "<unknown>"
         _log.info(
             "guild=%d track-end title=%r reason=%s",
             guild_id,
-            title,
+            _track_title(event.track),
             event.reason,
         )
         # NOTE (PR6a wires this up): release audio cache reference for the
@@ -210,8 +233,7 @@ class EventHandler:
     @lavalink.listener(lavalink.TrackExceptionEvent)
     async def on_track_exception(self, event: lavalink.TrackExceptionEvent) -> None:
         guild_id = event.player.guild_id
-        track = event.track
-        title = track.title if track is not None else "<unknown>"
+        title = _track_title(event.track)
         _log.warning(
             "guild=%d track-exception title=%r severity=%s cause=%s",
             guild_id,
@@ -221,10 +243,14 @@ class EventHandler:
         )
         # TODO(PR6a): await audio_cache.release(track.identifier) on the
         # ended track — same rationale as TrackEndEvent.
+        # ``event.cause`` is a JVM stack trace; ``message`` is a short cause
+        # description. Prefer ``message`` and never the full ``cause`` —
+        # both are sanitised regardless.
+        detail = _safe_error_text(event.message)
         await _send_to_last_play_channel(
             self._bot,
             guild_id,
-            f"Track **{title}** failed: {event.message or event.cause}. Skipping.",
+            f"Track **{_safe_error_text(title)}** failed: {detail}. Skipping.",
         )
 
     @lavalink.listener(lavalink.TrackStuckEvent)
@@ -233,8 +259,7 @@ class EventHandler:
         # sits forever on the stuck track waiting for a TrackEndEvent that
         # never comes.
         guild_id = event.player.guild_id
-        track = event.track
-        title = track.title if track is not None else "<unknown>"
+        title = _track_title(event.track)
         _log.warning(
             "guild=%d track-stuck title=%r threshold_ms=%d",
             guild_id,
@@ -248,7 +273,7 @@ class EventHandler:
         await _send_to_last_play_channel(
             self._bot,
             guild_id,
-            f"Track **{title}** got stuck and was skipped.",
+            f"Track **{_safe_error_text(title)}** got stuck and was skipped.",
         )
 
     @lavalink.listener(lavalink.QueueEndEvent)
@@ -271,7 +296,7 @@ class EventHandler:
         )
         if event.code != 4014:
             return
-        _clear_player_queue(event.player)
+        cast(lavalink.DefaultPlayer, event.player).queue.clear()
         _cancel_auto_leave(guild_id)
         _reset_voice_ready(guild_id)
         await _send_to_last_play_channel(
@@ -292,7 +317,7 @@ class EventHandler:
         notified: set[int] = set()
         for player in list(client.player_manager.values()):
             guild_id = player.guild_id
-            _clear_player_queue(player)
+            cast(lavalink.DefaultPlayer, player).queue.clear()
             _cancel_auto_leave(guild_id)
             _reset_voice_ready(guild_id)
             if guild_id in notified:
@@ -349,17 +374,37 @@ def _bridge_voice_state_payload(
     )
 
 
+def _is_valid_discord_endpoint(endpoint: str | None) -> bool:
+    return endpoint is not None and _DISCORD_ENDPOINT_RE.match(endpoint) is not None
+
+
 async def _on_voice_server_update(event: hikari.VoiceServerUpdateEvent) -> None:
+    payload = _bridge_voice_server_payload(event)
+    endpoint = payload["d"]["endpoint"]
+    if not _is_valid_discord_endpoint(endpoint):
+        _log.warning(
+            "guild=%d dropping voice-server update with non-Discord endpoint %r",
+            event.guild_id,
+            endpoint,
+        )
+        return
     if _ll_client is None:
         return
-    await _ll_client.voice_update_handler(_bridge_voice_server_payload(event))
+    await _ll_client.voice_update_handler(payload)
 
 
 async def _on_voice_state_update(event: hikari.VoiceStateUpdateEvent) -> None:
+    # Handshake bookkeeping runs BEFORE the lavalink short-circuit so an
+    # early voice state for our own user during the bootstrap window still
+    # marks the guild ready (see MEDIUM-2 in PR3-review.md).
+    _track_own_voice_state(event)
+
     if _ll_client is None:
         return
     await _ll_client.voice_update_handler(_bridge_voice_state_payload(event))
 
+
+def _track_own_voice_state(event: hikari.VoiceStateUpdateEvent) -> None:
     # Resolve the bot's own user via ``get_me`` if the app supports it.
     # Duck-typed so tests can substitute a minimal app without subclassing
     # ``hikari.GatewayBot``.
@@ -371,7 +416,21 @@ async def _on_voice_state_update(event: hikari.VoiceStateUpdateEvent) -> None:
     if event.state.channel_id is None:
         _reset_voice_ready(event.state.guild_id)
     else:
-        _voice_ready_event(event.state.guild_id).set()
+        _voice_ready_events.setdefault(event.state.guild_id, asyncio.Event()).set()
+
+
+async def _on_guild_leave(event: hikari.GuildLeaveEvent) -> None:
+    """Tear down per-guild state when the bot is kicked / leaves a guild."""
+    guild_id = event.guild_id
+    _cancel_auto_leave(guild_id)
+    last_play_channel.pop(guild_id, None)
+    _voice_ready_events.pop(guild_id, None)
+    client = _ll_client
+    if client is not None:
+        try:
+            await client.player_manager.destroy(guild_id)
+        except Exception:
+            _log.exception("guild=%d failed to destroy player on guild-leave", guild_id)
 
 
 async def _on_shard_ready(
@@ -397,6 +456,8 @@ def _build_lavalink_client(
         port=cfg.lavalink_port,
         password=cfg.lavalink_password,
         region="us",
+        # The explicit name keeps host:port out of the default
+        # f"{region}-{host}:{port}" — /lltest surfaces node.name to invokers.
         name="ryzic-default",
     )
     client.add_event_hooks(EventHandler(bot))
@@ -416,41 +477,19 @@ def register_listeners(bot: hikari.GatewayBot, cfg: config.Config) -> None:
     bot.subscribe(hikari.ShardReadyEvent, _shard_ready)
     bot.subscribe(hikari.VoiceServerUpdateEvent, _on_voice_server_update)
     bot.subscribe(hikari.VoiceStateUpdateEvent, _on_voice_state_update)
-
-
-class LavalinkNotReadyError(RuntimeError):
-    """Raised when DI resolves the lavalink client before bootstrap completes."""
-
-
-def _lavalink_client_factory() -> lavalink.Client:
-    if _ll_client is None:
-        raise LavalinkNotReadyError("Lavalink client requested before ShardReadyEvent fired.")
-    return _ll_client
-
-
-def register_di(client: lightbulb.Client) -> None:
-    """Register the lavalink-client factory in lightbulb's DI registry."""
-    client.di.registry_for(lightbulb.di.Contexts.DEFAULT).register_factory(
-        lavalink.Client, _lavalink_client_factory
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test seams
-# ---------------------------------------------------------------------------
+    bot.subscribe(hikari.GuildLeaveEvent, _on_guild_leave)
 
 
 def _set_lavalink_client_for_test(client: lavalink.Client | None) -> None:
-    """Test-only: install a stand-in lavalink client (or clear it).
-
-    Production code never calls this; ``_ll_client`` is otherwise a private
-    module global owned by ``_on_shard_ready``.
-    """
+    """Test-only: install a stand-in lavalink client (or clear it)."""
     global _ll_client
     _ll_client = client
 
 
 def _reset_state_for_test() -> None:
+    for task in auto_leave_tasks.values():
+        if not task.done():
+            task.cancel()
     last_play_channel.clear()
     auto_leave_tasks.clear()
     _voice_ready_events.clear()

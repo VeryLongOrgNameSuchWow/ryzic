@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 import dotenv
 import hikari
 import lightbulb
 
 from . import config, lavalink_glue
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
 
 _log = logging.getLogger(__name__)
 
@@ -36,18 +32,6 @@ def _build_client(bot: hikari.GatewayBot, cfg: config.Config) -> lightbulb.Clien
     return client
 
 
-def _make_starter(
-    client: lightbulb.Client,
-) -> Callable[[hikari.StartingEvent], Coroutine[None, None, None]]:
-    async def _on_starting(_: hikari.StartingEvent) -> None:
-        # Extensions register commands; commands are synced inside
-        # ``client.start``, so load before starting.
-        await client.load_extensions("ryzic.commands.lltest")
-        await client.start()
-
-    return _on_starting
-
-
 def main() -> None:
     dotenv.load_dotenv()
     cfg = config.load()
@@ -63,10 +47,15 @@ def main() -> None:
         intents=hikari.Intents.GUILDS | hikari.Intents.GUILD_VOICE_STATES,
     )
     client = _build_client(bot, cfg)
-    lavalink_glue.register_di(client)
     lavalink_glue.register_listeners(bot, cfg)
 
-    bot.subscribe(hikari.StartingEvent, _make_starter(client))
+    async def _on_starting(_: hikari.StartingEvent) -> None:
+        # Extensions register commands; commands are synced inside
+        # ``client.start``, so load before starting.
+        await client.load_extensions("ryzic.commands.lltest")
+        await client.start()
+
+    bot.subscribe(hikari.StartingEvent, _on_starting)
     bot.subscribe(hikari.StoppingEvent, client.stop)
 
     bot.run()
