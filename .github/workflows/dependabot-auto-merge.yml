@@ -2,6 +2,7 @@ name: Dependabot auto-merge
 
 # Auto-approves and enables auto-merge (squash) for non-major Dependabot PRs.
 # Major bumps are left for manual review.
+# yt-dlp is also exempt from auto-merge — it parses untrusted user URLs and ships frequent releases (mirrors the ungrouped dependabot.yml carve-out).
 #
 # The repo ruleset on `main` requires squash-only merges + status checks pass,
 # so `gh pr merge --auto --squash` queues the PR and GitHub completes the
@@ -29,14 +30,14 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Approve non-major bumps
-        if: ${{ steps.metadata.outputs.update-type != 'version-update:semver-major' }}
+        if: ${{ steps.metadata.outputs.update-type != 'version-update:semver-major' && !contains(steps.metadata.outputs.dependency-names, 'yt-dlp') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr review --approve "$PR_URL"
 
       - name: Enable auto-merge for non-major bumps
-        if: ${{ steps.metadata.outputs.update-type != 'version-update:semver-major' }}
+        if: ${{ steps.metadata.outputs.update-type != 'version-update:semver-major' && !contains(steps.metadata.outputs.dependency-names, 'yt-dlp') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
