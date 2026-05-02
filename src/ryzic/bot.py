@@ -8,7 +8,7 @@ import dotenv
 import hikari
 import lightbulb
 
-from . import config, lavalink_glue
+from . import audio_cache, config, lavalink_glue
 
 _log = logging.getLogger(__name__)
 
@@ -32,6 +32,22 @@ def _build_client(bot: hikari.GatewayBot, cfg: config.Config) -> lightbulb.Clien
     return client
 
 
+async def _bootstrap_audio_cache(cfg: config.Config) -> audio_cache.AudioCache:
+    """Open the audio cache + run the orphan sweep before the bot serves traffic.
+
+    The sweep runs unconditionally on startup: a previous crash may
+    have left partial files in ``tmp/`` and orphaned audio files
+    whose sqlite rows never made it to disk. Cheap once per boot.
+    """
+    cache = audio_cache.AudioCache(cfg.cache_dir, max_bytes=cfg.cache_max_gb * 1024**3)
+    await cache.open()
+    deleted = await audio_cache.sweep_orphans(cfg.cache_dir)
+    if deleted:
+        _log.info("startup orphan sweep removed %d files", deleted)
+    audio_cache.set_audio_cache(cache)
+    return cache
+
+
 def main() -> None:
     dotenv.load_dotenv()
     cfg = config.load()
@@ -49,14 +65,27 @@ def main() -> None:
     client = _build_client(bot, cfg)
     lavalink_glue.register_listeners(bot, cfg)
 
+    cache: audio_cache.AudioCache | None = None
+
     async def _on_starting(_: hikari.StartingEvent) -> None:
+        nonlocal cache
+        # Audio cache must be ready BEFORE /play runs — start it before
+        # syncing the slash commands so a fast user invocation can
+        # never race the bootstrap.
+        cache = await _bootstrap_audio_cache(cfg)
         # Extensions register commands; commands are synced inside
         # ``client.start``, so load before starting.
-        await client.load_extensions("ryzic.commands.lltest")
+        await client.load_extensions("ryzic.commands.lltest", "ryzic.commands.play")
         await client.start()
 
+    async def _on_stopping(_: hikari.StoppingEvent) -> None:
+        await client.stop()
+        if cache is not None:
+            audio_cache.set_audio_cache(None)
+            await cache.close()
+
     bot.subscribe(hikari.StartingEvent, _on_starting)
-    bot.subscribe(hikari.StoppingEvent, client.stop)
+    bot.subscribe(hikari.StoppingEvent, _on_stopping)
 
     bot.run()
 

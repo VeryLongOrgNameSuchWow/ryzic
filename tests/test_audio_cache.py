@@ -642,3 +642,23 @@ async def test_download_refreshes_mtime_after_replace(tmp_path: Path) -> None:
         assert path.stat().st_mtime > old_mtime + 100
     finally:
         await cache.close()
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton accessor
+# ---------------------------------------------------------------------------
+
+
+async def test_singleton_round_trip(tmp_path: Path) -> None:
+    # Set/get/clear contract: PR6a's /play depends on
+    # ``get_audio_cache()`` returning the bot.py-installed instance.
+    assert audio_cache.get_audio_cache() is None
+    cache = AudioCache(tmp_path, max_bytes=10_000)
+    await cache.open()
+    try:
+        audio_cache.set_audio_cache(cache)
+        assert audio_cache.get_audio_cache() is cache
+        audio_cache.set_audio_cache(None)
+        assert audio_cache.get_audio_cache() is None
+    finally:
+        await cache.close()

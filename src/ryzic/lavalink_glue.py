@@ -44,13 +44,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from pathlib import Path
 from typing import cast
 
 import hikari
 import lavalink
 from lavalink.common import VoiceServerUpdatePayload, VoiceStateUpdatePayload
 
-from . import config
+from . import audio_cache, config
 
 _log = logging.getLogger(__name__)
 
@@ -95,8 +96,14 @@ async def wait_for_voice_ready(guild_id: int, timeout: float = VOICE_READY_TIMEO
     timeout. Callers should treat ``False`` as "abort the play attempt and
     surface a friendly error" rather than retrying — the gateway timed out,
     not a transient race.
+
+    The event is cleared up-front so a stale "ready" from a prior session
+    cannot return True instantly: a channel move from A → B (both non-None)
+    leaves the old event set, but lavalink.py won't see the new
+    VOICE_SERVER_UPDATE for B until the setter re-fires.
     """
     event = _voice_ready_events.setdefault(guild_id, asyncio.Event())
+    event.clear()
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
     except TimeoutError:
@@ -178,6 +185,36 @@ def _track_title(track: lavalink.AudioTrack | None) -> str:
     return track.title if track is not None else "<unknown>"
 
 
+async def _release_track(track: lavalink.AudioTrack | None) -> None:
+    """Drop the audio cache pin for ``track`` if a cache + identifier exist.
+
+    No-ops when the cache hasn't been bootstrapped yet (test harnesses
+    without a cache, early shutdown order) or when the track has no
+    identifier (Lavalink occasionally surfaces ``None`` after a
+    failed-decode TrackEndEvent — release would do nothing useful).
+    """
+    if track is None:
+        return
+    cache = audio_cache.get_audio_cache()
+    if cache is None:
+        return
+    identifier = getattr(track, "identifier", None)
+    if not identifier:
+        return
+    # ``LocalAudioSourceManager`` populates ``AudioTrackInfo.identifier``
+    # with the file path we passed to ``node.get_tracks(...)`` — e.g.
+    # ``/var/cache/ryzic/audio/dQ/dQw4w9WgXcQ.audio``. The cache pins
+    # by ``video_id``, so we strip the path components to recover it
+    # (file stem == video_id by construction in ``audio_cache._audio_path``).
+    video_id = Path(identifier).stem
+    try:
+        await cache.release(video_id)
+    except Exception:
+        # Releasing should never raise; log + swallow rather than letting
+        # the lavalink event hook take down the player loop.
+        _log.exception("failed to release audio cache entry %s", video_id)
+
+
 def _safe_error_text(text: str | None) -> str:
     """Sanitise server-supplied error text before posting to a public channel.
 
@@ -220,12 +257,7 @@ class EventHandler:
             _track_title(event.track),
             event.reason,
         )
-        # NOTE (PR6a wires this up): release audio cache reference for the
-        # finished track. Hook shape:
-        #   if track is not None:
-        #       await audio_cache.release(track.identifier)
-        # PR3b's audio_cache module does not exist yet, so importing it here
-        # would create a circular dependency on an unwritten file.
+        await _release_track(event.track)
 
         # NEVER call player.play() here; the default player auto-advances
         # the queue and a manual play() races into Lavalink.py#153.
@@ -241,8 +273,7 @@ class EventHandler:
             event.severity,
             event.cause,
         )
-        # TODO(PR6a): await audio_cache.release(track.identifier) on the
-        # ended track — same rationale as TrackEndEvent.
+        await _release_track(event.track)
         # ``event.cause`` is a JVM stack trace; ``message`` is a short cause
         # description. Prefer ``message`` and never the full ``cause`` —
         # both are sanitised regardless.

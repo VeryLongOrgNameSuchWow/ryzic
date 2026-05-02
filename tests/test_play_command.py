@@ -1,0 +1,922 @@
+"""Tests for ``ryzic.commands.play``.
+
+The /play handler glues together yt-dlp, the audio cache, lavalink,
+and Discord. We mock each collaborator at its module boundary so each
+test exercises a single decision branch:
+
+* URL validation, playlist URL detection, friendly error mapping.
+* Voice precondition checks (DM, no voice, stage channel, bot in
+  another channel).
+* Audio service availability (cache singleton, lavalink client +
+  available nodes).
+* Queue-cap enforcement.
+* Voice handshake timeout.
+* Per-track load failures + cache release contract.
+* Embed plumbing for both the single-track and playlist branches.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, patch
+
+import hikari
+import lavalink
+import lightbulb
+import pytest
+
+from ryzic import audio_cache, lavalink_glue
+from ryzic.commands import play as play_module
+from ryzic.errors import FetchFailed
+from ryzic.ytdlp import PlaylistInfo, TrackInfo
+
+# ---------------------------------------------------------------------------
+# Fakes
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeUser:
+    id: int
+    username: str = "alice"
+
+
+@dataclass
+class _FakeVoiceState:
+    channel_id: int | None
+
+
+@dataclass
+class _FakeChannel:
+    type: hikari.ChannelType
+
+
+class _FakeCache:
+    def __init__(
+        self,
+        states: dict[tuple[int, int], _FakeVoiceState | None] | None = None,
+        channels: dict[int, _FakeChannel] | None = None,
+    ) -> None:
+        self._states = states or {}
+        self._channels = channels or {}
+
+    def get_voice_state(self, guild_id: int, user_id: int) -> _FakeVoiceState | None:
+        return self._states.get((guild_id, user_id))
+
+    def get_guild_channel(self, channel_id: int) -> _FakeChannel | None:
+        return self._channels.get(channel_id)
+
+
+class _FakeBot:
+    """``hikari.GatewayBot`` slim stand-in covering exactly the surface /play uses."""
+
+    def __init__(
+        self,
+        bot_user_id: int = 10,
+        states: dict[tuple[int, int], _FakeVoiceState | None] | None = None,
+        channels: dict[int, _FakeChannel] | None = None,
+    ) -> None:
+        self._me = _FakeUser(bot_user_id)
+        self.cache = _FakeCache(states, channels)
+        self.update_voice_state_calls: list[tuple[int, int | None]] = []
+
+    def get_me(self) -> _FakeUser:
+        return self._me
+
+    async def update_voice_state(
+        self,
+        guild_id: int,
+        channel_id: int | None,
+        *,
+        self_deaf: bool = False,
+    ) -> None:
+        self.update_voice_state_calls.append((guild_id, channel_id))
+
+
+class _FakeLightbulbClient:
+    def __init__(self, app: _FakeBot) -> None:
+        self.app = app
+
+
+class _FakeContext:
+    def __init__(
+        self,
+        bot: _FakeBot,
+        guild_id: int | None = 111,
+        user_id: int = 222,
+        channel_id: int = 555,
+    ) -> None:
+        self.guild_id = guild_id
+        self.user = _FakeUser(user_id)
+        self.channel_id = channel_id
+        self.client = _FakeLightbulbClient(bot)
+        self.responses: list[tuple[Any, dict[str, Any]]] = []
+        self.deferred = False
+
+    async def defer(self) -> None:
+        self.deferred = True
+
+    async def respond(self, content: Any = None, **kwargs: Any) -> None:
+        self.responses.append((content, kwargs))
+
+
+@dataclass
+class _FakeNode:
+    available: bool = True
+    name: str = "test"
+    region: str = "us"
+    get_tracks_results: list[Any] = field(default_factory=list)
+    get_tracks_calls: list[str] = field(default_factory=list)
+
+    async def get_tracks(self, query: str) -> Any:
+        self.get_tracks_calls.append(query)
+        if self.get_tracks_results:
+            result = self.get_tracks_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return _FakeLoadResult.empty()
+
+
+class _FakeNodeManager:
+    def __init__(self, nodes: list[_FakeNode]) -> None:
+        self.nodes = nodes
+
+    @property
+    def available_nodes(self) -> list[_FakeNode]:
+        return [n for n in self.nodes if n.available]
+
+
+@dataclass
+class _FakeAudioTrack:
+    """Slim AudioTrack stand-in — covers the duck shape ``player.add`` reads."""
+
+    title: str = "Some Song"
+    identifier: str = "abc123"
+    duration: int = 213_000
+    uri: str = "https://example.com/x"
+
+
+@dataclass
+class _FakeLoadResult:
+    load_type: lavalink.server.LoadType
+    tracks: list[Any]
+    error: Any | None = None
+
+    @classmethod
+    def empty(cls) -> _FakeLoadResult:
+        return cls(load_type=lavalink.server.LoadType.EMPTY, tracks=[])
+
+
+class _FakePlayer:
+    def __init__(self, guild_id: int) -> None:
+        self.guild_id = guild_id
+        self.queue: list[Any] = []
+        self.is_playing: bool = False
+        self.play_called: int = 0
+        self.added: list[tuple[Any, int]] = []
+
+    def add(self, track: Any, requester: int = 0, index: Any = None) -> None:
+        self.queue.append(track)
+        self.added.append((track, requester))
+
+    async def play(self) -> None:
+        self.play_called += 1
+        # Mimic lavalink: pop one off the queue + start it.
+        if self.queue:
+            self.queue.pop(0)
+        self.is_playing = True
+
+
+class _FakePlayerManager:
+    def __init__(self) -> None:
+        self.players: dict[int, _FakePlayer] = {}
+
+    def create(self, guild_id: int, **kwargs: Any) -> _FakePlayer:
+        if guild_id not in self.players:
+            self.players[guild_id] = _FakePlayer(guild_id)
+        return self.players[guild_id]
+
+
+class _FakeLavalinkClient:
+    def __init__(self, nodes: list[_FakeNode] | None = None) -> None:
+        self.node_manager = _FakeNodeManager(nodes if nodes is not None else [_FakeNode()])
+        self.player_manager = _FakePlayerManager()
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_module_state() -> None:
+    """Wipe the audio cache + lavalink singletons between tests."""
+    audio_cache.set_audio_cache(None)
+    lavalink_glue._reset_state_for_test()
+    lavalink_glue._set_lavalink_client_for_test(None)
+
+
+@pytest.fixture
+async def cache(tmp_path: Path) -> Any:
+    c = audio_cache.AudioCache(tmp_path, max_bytes=10_000_000)
+    await c.open()
+    audio_cache.set_audio_cache(c)
+    try:
+        yield c
+    finally:
+        audio_cache.set_audio_cache(None)
+        await c.close()
+
+
+def _bot_in_voice_with(
+    user_channel_id: int,
+    bot_channel_id: int | None = None,
+    user_id: int = 222,
+    bot_user_id: int = 10,
+    channel_type: hikari.ChannelType = hikari.ChannelType.GUILD_VOICE,
+) -> _FakeBot:
+    states: dict[tuple[int, int], _FakeVoiceState | None] = {
+        (111, user_id): _FakeVoiceState(channel_id=user_channel_id),
+    }
+    if bot_channel_id is not None:
+        states[(111, bot_user_id)] = _FakeVoiceState(channel_id=bot_channel_id)
+    channels = {user_channel_id: _FakeChannel(type=channel_type)}
+    return _FakeBot(bot_user_id=bot_user_id, states=states, channels=channels)
+
+
+def _track(video_id: str = "dQw4w9WgXcQ") -> TrackInfo:
+    return TrackInfo(
+        video_id=video_id,
+        url=f"https://www.youtube.com/watch?v={video_id}",
+        title="Test Track",
+        uploader="Tester",
+        duration_ms=180_000,
+    )
+
+
+def _ll_with_one_node() -> tuple[_FakeLavalinkClient, _FakeNode]:
+    node = _FakeNode()
+    return _FakeLavalinkClient(nodes=[node]), node
+
+
+# ---------------------------------------------------------------------------
+# URL validation + DM rejection
+# ---------------------------------------------------------------------------
+
+
+async def test_dm_invocation_returns_friendly_error() -> None:
+    bot = _FakeBot()
+    ctx = _FakeContext(bot, guild_id=None)
+    await play_module._handle_play(cast(lightbulb.Context, ctx), "https://www.youtube.com/")
+    assert ctx.responses[0][0] == "Run /play in a server."
+    assert ctx.responses[0][1].get("ephemeral") is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.example.com/watch?v=abc",
+        "http://www.youtube.com/watch?v=abc",  # not https
+        "ftp://youtube.com/x",
+        "not-a-url",
+    ],
+)
+async def test_unsupported_url_rejected_before_io(url: str) -> None:
+    bot = _FakeBot()
+    ctx = _FakeContext(bot)
+    await play_module._handle_play(cast(lightbulb.Context, ctx), url)
+    assert ctx.responses[0][0] == "Only YouTube URLs are supported."
+
+
+# ---------------------------------------------------------------------------
+# Audio service availability
+# ---------------------------------------------------------------------------
+
+
+async def test_missing_audio_cache_maps_to_audio_service_down() -> None:
+    bot = _FakeBot()
+    ctx = _FakeContext(bot)
+    # No audio_cache singleton installed.
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, _FakeLavalinkClient()))
+    await play_module._handle_play(
+        cast(lightbulb.Context, ctx),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
+
+
+async def test_missing_lavalink_client_maps_to_audio_service_down(cache: Any) -> None:
+    bot = _FakeBot()
+    ctx = _FakeContext(bot)
+    # No lavalink client installed.
+    await play_module._handle_play(
+        cast(lightbulb.Context, ctx),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
+
+
+async def test_no_available_nodes_maps_to_audio_service_down(cache: Any) -> None:
+    bot = _FakeBot()
+    ctx = _FakeContext(bot)
+    ll = _FakeLavalinkClient(nodes=[_FakeNode(available=False)])
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    await play_module._handle_play(
+        cast(lightbulb.Context, ctx),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
+
+
+# ---------------------------------------------------------------------------
+# Voice precondition checks
+# ---------------------------------------------------------------------------
+
+
+async def test_user_not_in_voice_returns_friendly_error(cache: Any) -> None:
+    bot = _FakeBot()
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    await play_module._handle_play(
+        cast(lightbulb.Context, ctx),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    assert ctx.responses[0][0] == "Join a voice channel first."
+
+
+async def test_user_in_stage_channel_rejected(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999, channel_type=hikari.ChannelType.GUILD_STAGE)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    await play_module._handle_play(
+        cast(lightbulb.Context, ctx),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    assert ctx.responses[0][0] == "Stage channels aren't supported. Use a regular voice channel."
+
+
+async def test_bot_in_different_channel_rejected_with_mention(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999, bot_channel_id=888)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    await play_module._handle_play(
+        cast(lightbulb.Context, ctx),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    assert ctx.responses[0][0] == "I'm already playing in <#888>. Join that channel."
+
+
+# ---------------------------------------------------------------------------
+# yt-dlp friendly error mapping (verbatim from FetchFailed.args[0])
+# ---------------------------------------------------------------------------
+
+
+async def test_friendly_yt_dlp_error_passes_through_verbatim(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    msg = "That video is age-restricted and can't be played."
+    with patch.object(
+        play_module.ytdlp,
+        "resolve_track",
+        side_effect=FetchFailed(msg),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    assert ctx.responses[0][0] == msg
+
+
+async def test_friendly_message_falls_back_when_args_empty() -> None:
+    assert play_module._friendly_message(FetchFailed()) == "Could not load that URL."
+
+
+# ---------------------------------------------------------------------------
+# Single-track happy + edge paths
+# ---------------------------------------------------------------------------
+
+
+async def test_single_track_success_idle_plays_now(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    track = _track()
+    audio_track = _FakeAudioTrack(title=track.title, identifier=track.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+
+    with (
+        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        # Pretend the voice handshake completed instantly.
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+
+    assert bot.update_voice_state_calls == [(111, 999)]
+    player = ll.player_manager.players[111]
+    assert player.play_called == 1
+    assert len(player.added) == 1
+    embed = ctx.responses[0][1]["embed"]
+    assert isinstance(embed, hikari.Embed)
+    assert embed.title == "Queued"
+    assert "playing now" in (embed.footer.text if embed.footer else "")
+    # /play also seeded the last_play_channel for the EventHandler
+    # error reporter to land in the right text channel.
+    assert lavalink_glue.last_play_channel.get(111) == 555
+
+
+async def test_single_track_success_with_existing_queue_shows_position(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    # Pre-fill the player queue + mark it as already playing.
+    player = ll.player_manager.create(guild_id=111)
+    player.queue = [_FakeAudioTrack(title="prev")]
+    player.is_playing = True
+
+    track = _track()
+    audio_track = _FakeAudioTrack(title=track.title, identifier=track.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+
+    with (
+        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+
+    embed = ctx.responses[0][1]["embed"]
+    # Was 1 in queue, now 2 → footer says "position 2 in queue".
+    assert "position 2 in queue" in (embed.footer.text if embed.footer else "")
+    # Did not call play() again because the player was already playing.
+    assert player.play_called == 0
+
+
+async def test_single_track_queue_full_rejects(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    player = ll.player_manager.create(guild_id=111)
+    player.queue = [_FakeAudioTrack(title=f"t{i}") for i in range(500)]
+
+    track = _track()
+    with patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+
+    msg = ctx.responses[0][0]
+    assert isinstance(msg, str)
+    assert msg.startswith("Queue is full (500/500)")
+    # Did NOT connect to voice (cap check happens first).
+    assert bot.update_voice_state_calls == []
+
+
+async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> None:
+    """Handshake timeout maps to the spec'd "audio service down" string.
+
+    The track must already be loaded by the time we connect (load-first
+    order, MEDIUM-1) so the test wires up the full happy load path then
+    fails on the handshake.
+    """
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    track = _track()
+    audio_track = _FakeAudioTrack(title=track.title, identifier=track.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+    release_mock = AsyncMock()
+    with (
+        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(audio_cache.AudioCache, "release", release_mock),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=False),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
+    # The pin acquired by get_or_download must be released because we
+    # never enqueued the track (handshake failed).
+    release_mock.assert_awaited_once_with(track.video_id)
+
+
+@pytest.mark.parametrize(
+    "load_result",
+    [
+        _FakeLoadResult.empty(),
+        _FakeLoadResult(load_type=lavalink.server.LoadType.ERROR, tracks=[], error="boom"),
+    ],
+    ids=["empty", "load-error"],
+)
+async def test_lavalink_load_failure_releases_pin(cache: Any, load_result: _FakeLoadResult) -> None:
+    """Both EMPTY and ERROR load types must drop the cache pin (M1 §4)."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    track = _track()
+    node.get_tracks_results.append(load_result)
+
+    with (
+        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(audio_cache.AudioCache, "release", AsyncMock()) as release_mock,
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    release_mock.assert_awaited_once_with(track.video_id)
+    assert "Could not load that track" in str(ctx.responses[0][0])
+
+
+# ---------------------------------------------------------------------------
+# Playlist URL detection + playlist branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/watch?v=abc", False),
+        ("https://www.youtube.com/playlist?list=PL123", True),
+        ("https://www.youtube.com/watch?v=abc&list=PL123", True),
+        ("https://youtu.be/abc?si=xyz", False),
+        # parse_qs accepts arbitrary strings; the helper must not blow up.
+        ("not://a-url", False),
+        ("", False),
+    ],
+)
+def test_is_playlist_url(url: str, expected: bool) -> None:
+    assert play_module._is_playlist_url(url) is expected
+
+
+async def test_playlist_success(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    entries = [_track(video_id=f"vid{i:08d}") for i in range(3)]
+    info = PlaylistInfo(playlist_id="PL12345abcde", title="My PL", entries=entries)
+    audio_tracks = [_FakeAudioTrack(title=t.title, identifier=t.video_id) for t in entries]
+    for at in audio_tracks:
+        node.get_tracks_results.append(
+            _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[at])
+        )
+
+    with (
+        patch.object(
+            play_module.playlist_cache,
+            "fetch_with_fallback",
+            AsyncMock(return_value=(info, 1234567890, False)),
+        ),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+
+    embed = ctx.responses[0][1]["embed"]
+    assert embed.title == "Queued playlist"
+    assert "3 tracks" in (embed.description or "")
+    player = ll.player_manager.players[111]
+    assert len(player.added) == 3
+    # play() called exactly once (after first track enqueued).
+    assert player.play_called == 1
+
+
+async def test_playlist_offline_fallback_uses_cache_embed(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    entry = _track()
+    info = PlaylistInfo(playlist_id="PL12345abcde", title="Cached", entries=[entry])
+    node.get_tracks_results.append(
+        _FakeLoadResult(
+            load_type=lavalink.server.LoadType.TRACK,
+            tracks=[_FakeAudioTrack(title=entry.title, identifier=entry.video_id)],
+        )
+    )
+
+    with (
+        patch.object(
+            play_module.playlist_cache,
+            "fetch_with_fallback",
+            AsyncMock(return_value=(info, 1234567890, True)),
+        ),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+
+    embed = ctx.responses[0][1]["embed"]
+    assert embed.title == "Queued playlist (offline metadata)"
+
+
+async def test_playlist_empty_returns_friendly(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    info = PlaylistInfo(playlist_id="PL12345abcde", title="empty", entries=[])
+    with patch.object(
+        play_module.playlist_cache,
+        "fetch_with_fallback",
+        AsyncMock(return_value=(info, 1234567890, False)),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+    assert ctx.responses[0][0] == "That playlist is empty or private."
+
+
+async def test_playlist_queue_overflow_rejects(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    player = ll.player_manager.create(guild_id=111)
+    # 499 already queued + 2 incoming would breach the 500 cap.
+    player.queue = [_FakeAudioTrack() for _ in range(499)]
+
+    info = PlaylistInfo(
+        playlist_id="PL12345abcde",
+        title="overflow",
+        entries=[_track("aaa12345"), _track("bbb12345")],
+    )
+    with patch.object(
+        play_module.playlist_cache,
+        "fetch_with_fallback",
+        AsyncMock(return_value=(info, 1234567890, False)),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+    assert "Queue is full" in str(ctx.responses[0][0])
+
+
+async def test_playlist_all_tracks_fail_returns_friendly(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    info = PlaylistInfo(
+        playlist_id="PL12345abcde",
+        title="all-fail",
+        entries=[_track("aaa12345"), _track("bbb12345")],
+    )
+    # Both lavalink loads return EMPTY → both tracks fail.
+    node.get_tracks_results.extend([_FakeLoadResult.empty(), _FakeLoadResult.empty()])
+
+    with (
+        patch.object(
+            play_module.playlist_cache,
+            "fetch_with_fallback",
+            AsyncMock(return_value=(info, 1234567890, False)),
+        ),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(audio_cache.AudioCache, "release", AsyncMock()),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+    assert "Could not load any tracks" in str(ctx.responses[0][0])
+
+
+async def test_playlist_yt_dlp_total_failure_returns_friendly(cache: Any) -> None:
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    with patch.object(
+        play_module.playlist_cache,
+        "fetch_with_fallback",
+        AsyncMock(side_effect=FetchFailed("That playlist is private.")),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+    assert ctx.responses[0][0] == "That playlist is private."
+
+
+async def test_playlist_voice_handshake_timeout(cache: Any) -> None:
+    """Handshake timeout maps to the spec'd "audio service down" string."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    entry = _track()
+    info = PlaylistInfo(
+        playlist_id="PL12345abcde",
+        title="will-time-out",
+        entries=[entry],
+    )
+    audio_track = _FakeAudioTrack(title=entry.title, identifier=entry.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+    release_mock = AsyncMock()
+    with (
+        patch.object(
+            play_module.playlist_cache,
+            "fetch_with_fallback",
+            AsyncMock(return_value=(info, 1234567890, False)),
+        ),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(audio_cache.AudioCache, "release", release_mock),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=False),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+    assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
+    release_mock.assert_awaited_once_with(entry.video_id)
+
+
+async def test_load_one_handles_node_get_tracks_exception(cache: Any) -> None:
+    """A get_tracks() exception must release the cache pin and return None."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    track = _track()
+    # Queue an exception in the node's response stack — the load helper
+    # must release the cache pin and surface the friendly error.
+    node.get_tracks_results.append(RuntimeError("boom"))
+
+    with (
+        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(audio_cache.AudioCache, "release", AsyncMock()) as release_mock,
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    release_mock.assert_awaited_once_with(track.video_id)
+    assert "Could not load that track" in str(ctx.responses[0][0])
+
+
+async def test_yt_dlp_download_failure_per_track_drops_track(cache: Any) -> None:
+    """A per-track audio_cache failure must NOT release (download didn't pin)."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    track = _track()
+
+    with (
+        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(side_effect=FetchFailed("download bonk")),
+        ),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    assert "Could not load that track" in str(ctx.responses[0][0])
+
+
+# ---------------------------------------------------------------------------
+# Loader plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_loader_registered_play_command() -> None:
+    # Smoke check: the module exposes a Loader holding the Play command.
+    # The metaclass populates _command_data with the right name.
+    assert play_module.Play._command_data.name == "play"
+    assert play_module.Play._command_data.description.startswith("Queue")
+    # 1 string option named url, 1-500 chars.
+    opt = play_module.Play._command_data.options["url"]
+    assert opt.min_length == 1
+    assert opt.max_length == 500

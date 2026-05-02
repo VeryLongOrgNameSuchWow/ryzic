@@ -300,6 +300,35 @@ class AudioCache:
             total -= int(size)
 
 
+# Module-level singleton: ``bot.py`` constructs the AudioCache once at
+# startup and registers it here so ``commands/play.py`` can pull it
+# without lugging it through lightbulb's DI container. Symmetric to
+# ``lavalink_glue.get_lavalink_client`` — a typed accessor returning
+# ``Optional`` keeps the "service not ready yet" path explicit at the
+# callsite rather than smothered behind a DI exception wrapper.
+_INSTANCE: AudioCache | None = None
+
+
+def set_audio_cache(cache: AudioCache | None) -> None:
+    """Install (or clear) the process-wide :class:`AudioCache` singleton.
+
+    Call once after :meth:`AudioCache.open` succeeds; pass ``None`` from
+    the shutdown path so a residual instance with a closed connection
+    cannot leak into the next test.
+    """
+    global _INSTANCE
+    _INSTANCE = cache
+
+
+def get_audio_cache() -> AudioCache | None:
+    """Return the active :class:`AudioCache`, or ``None`` before bootstrap.
+
+    Commands map ``None`` to the same friendly error as a missing
+    lavalink client: ``"Audio service is down. Try again in a minute."``
+    """
+    return _INSTANCE
+
+
 async def sweep_orphans(cache_root: Path) -> int:
     """Delete tracked-but-unreferenced audio files and stale tmp files older than 1h.
 
