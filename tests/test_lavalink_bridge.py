@@ -530,3 +530,114 @@ def test_is_valid_discord_endpoint_allowlist() -> None:
     assert lavalink_glue._is_valid_discord_endpoint("evil.discord.media.attacker.com") is False
     assert lavalink_glue._is_valid_discord_endpoint(None) is False
     assert lavalink_glue._is_valid_discord_endpoint("") is False
+
+
+# ---------------------------------------------------------------------------
+# Audio cache release wiring (PR6a)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingCache:
+    """Captures release() calls so tests can assert the integration."""
+
+    def __init__(self) -> None:
+        self.released: list[str] = []
+
+    async def release(self, video_id: str) -> None:
+        self.released.append(video_id)
+
+
+@dataclass
+class _IdTrack:
+    title: str = "song"
+    identifier: str = "abc12345"
+
+
+@dataclass
+class _PlayerWithGuild:
+    guild_id: int = 111
+
+
+@dataclass
+class _EndEvent:
+    track: _IdTrack | None
+    player: _PlayerWithGuild
+    reason: str = "FINISHED"
+
+
+@dataclass
+class _ExceptionEvent:
+    track: _IdTrack | None
+    player: _PlayerWithGuild
+    message: str | None = "boom"
+    cause: str = "<jvm trace>"
+    severity: str = "FAULT"
+
+
+async def test_track_end_releases_audio_cache_pin() -> None:
+    """The TrackEnd hook MUST drop the audio cache refcount."""
+    from ryzic import audio_cache
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        await handler.on_track_end(
+            cast(
+                lavalink.TrackEndEvent,
+                _EndEvent(track=_IdTrack(identifier="vid67890"), player=_PlayerWithGuild()),
+            )
+        )
+        assert fake.released == ["vid67890"]
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_track_exception_also_releases_audio_cache_pin() -> None:
+    """LOAD_FAILED still has to release; otherwise the file pins forever."""
+    from ryzic import audio_cache
+
+    fake = _RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        lavalink_glue.last_play_channel[111] = 999
+        handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        await handler.on_track_exception(
+            cast(
+                lavalink.TrackExceptionEvent,
+                _ExceptionEvent(track=_IdTrack(identifier="failed01"), player=_PlayerWithGuild()),
+            )
+        )
+        assert fake.released == ["failed01"]
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_release_is_noop_without_cache_singleton() -> None:
+    """Tests / startup ordering must tolerate a missing cache."""
+    # No singleton installed; calling _release_track must not raise.
+    await lavalink_glue._release_track(cast(lavalink.AudioTrack, _IdTrack()))
+
+
+async def test_release_is_noop_for_none_track() -> None:
+    """``TrackEnd`` carries Optional[AudioTrack]; ``None`` must short-circuit."""
+    await lavalink_glue._release_track(None)
+
+
+async def test_release_swallows_exceptions(caplog: pytest.LogCaptureFixture) -> None:
+    """A misbehaving cache must not take down the player loop."""
+    from ryzic import audio_cache
+
+    class _BoomCache:
+        async def release(self, video_id: str) -> None:
+            raise RuntimeError("kaboom")
+
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, _BoomCache()))
+    try:
+        with caplog.at_level("ERROR", logger="ryzic.lavalink_glue"):
+            await lavalink_glue._release_track(cast(lavalink.AudioTrack, _IdTrack()))
+        assert any("failed to release" in r.message for r in caplog.records)
+    finally:
+        audio_cache.set_audio_cache(None)

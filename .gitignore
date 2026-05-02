@@ -20,6 +20,11 @@ wheels/
 *.sqlite-wal
 *.sqlite-shm
 
+# Coverage tooling artefacts
+.coverage
+.coverage.*
+htmlcov/
+
 # Claude Code agent worktrees + task state
 .claude/
 
