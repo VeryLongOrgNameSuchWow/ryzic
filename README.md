@@ -30,7 +30,7 @@ A self-hostable Discord music bot. Plays YouTube audio in voice channels via [La
 3. **Privileged Gateway Intents — leave them all OFF.** ryzic does not need Server Members, Message Content, or Presence. If you turned them on, turn them off.
 4. In **OAuth2** → **URL Generator**:
    - Scopes: `bot`, `applications.commands`.
-   - Bot Permissions: `Connect`, `Speak`, `Send Messages`, `Embed Links`, `Use Slash Commands`.
+   - Bot Permissions: `Connect`, `Speak`, `Send Messages`, `Embed Links`.
    - **Do not pick Administrator.** A music bot has no business with admin rights — it's a security smell and many server owners refuse such invites.
 5. Open the generated URL and invite the bot to your server.
 
@@ -78,7 +78,7 @@ You should hear audio within a couple of seconds.
 - **"Audio service is down."** Check `docker compose logs lavalink`. The bot expects Lavalink at `lavalink:2333` inside the compose network — if you've changed `LAVALINK_HOST` or `LAVALINK_PORT`, both services need to agree.
 - **No audio plays despite "Queued".** ryzic only joins your voice channel — make sure you joined first, and that the bot has `Connect` and `Speak` on it.
 - **`Failed to load: ...`** Some videos are age-restricted, region-locked, or private. ryzic surfaces a friendly variant of yt-dlp's error; the cause is upstream.
-- **You changed `RYZIC_CACHE_DIR`.** Update it in **both** the `ryzic` and `lavalink` services' volume mounts in `compose.yaml`. They share the cache directory and Lavalink reads files via the same absolute path that ryzic writes.
+- **You changed `RYZIC_CACHE_DIR`.** Prefer changing only the host-side path of the bind mount (top-level `volumes:` block) and leaving the in-container path alone. If you must change the in-container path, update the env value **and** both `volumes:` mount targets (ryzic and lavalink), and keep the lavalink mount `:ro`. A mismatch here means ryzic writes files Lavalink can't find.
 
 ## Configuration
 
@@ -92,7 +92,7 @@ All configuration is via environment variables (read from `.env` by `docker comp
 | `LAVALINK_PORT` | no | `2333` | |
 | `RYZIC_CACHE_DIR` | no | `/var/cache/ryzic` (compose) / `./.cache` (local) | Audio + playlist cache directory. **Both services must mount the same path.** |
 | `RYZIC_CACHE_MAX_GB` | no | `5` | LRU eviction kicks in once cached audio exceeds this size (GiB). |
-| `RYZIC_LOG_LEVEL` | no | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `RYZIC_LOG_LEVEL` | no | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
 | `RYZIC_GUILD_IDS` | no | unset | Comma-separated guild IDs for instant slash-command registration. Unset = global registration (up to 1h propagation). |
 
 ## Self-hoster considerations
@@ -112,15 +112,7 @@ uv run pytest -q
 uv run python -m ryzic    # requires DISCORD_BOT_TOKEN + a reachable Lavalink
 ```
 
-Code style is enforced by `ruff` and `ty`:
-
-```bash
-uv run ruff check
-uv run ruff format --check
-uv run ty check
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the PR workflow and [docs/manual-smoke-tests.md](docs/manual-smoke-tests.md) for the end-to-end checklist run before each release.
+Run the same lint/type/test suite CI runs before opening a PR — see [CONTRIBUTING.md § Pull requests](CONTRIBUTING.md#pull-requests) for the canonical command. [docs/manual-smoke-tests.md](docs/manual-smoke-tests.md) is the end-to-end checklist run before each release.
 
 ## Versioning
 

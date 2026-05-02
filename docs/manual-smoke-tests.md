@@ -6,7 +6,7 @@ Prerequisites:
 
 - A test Discord server you own.
 - A clean clone with `.env` populated per [README.md](../README.md).
-- Two voice channels in the test server, plus one stage channel (for stage rejection).
+- Two voice channels in the test server, plus one stage channel (for stage rejection — requires Server Settings → Enable Community).
 - A second Discord account (or a friend) is helpful but not required.
 
 Reset state between runs with `docker compose down -v && docker compose up -d` if you want a cold cache.
@@ -34,27 +34,26 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 ## Cache behavior
 
 - [ ] `/play` the same video twice in a row: the second play does **not** re-download (visible in `docker compose logs ryzic` as a cache-hit log; no yt-dlp activity).
-- [ ] Cache survives `docker compose restart ryzic`: re-`/play` the same video after restart still hits cache (no yt-dlp re-download).
-- [ ] LRU eviction triggers at the configured size: set `RYZIC_CACHE_MAX_GB=1` in `.env`, `docker compose up -d`, queue several long tracks (live concerts work), and confirm via `du -sh` on the cache volume that the directory stays under the cap and the oldest tracks are gone.
+- [ ] Two `/play` calls for the same URL within ~1s yield exactly one yt-dlp download (verify in `docker compose logs ryzic` — only one "downloading" log line per video). Both interactions report success.
+- [ ] Cache survives `docker compose restart ryzic`: re-`/play` the same video after restart still hits cache (no yt-dlp re-download). The queue itself is empty post-restart (per-guild state is in-memory by design).
+- [ ] LRU eviction triggers at the configured size: set `RYZIC_CACHE_MAX_GB=1` in `.env`, `docker compose up -d`, queue several long tracks (live concerts work), and confirm via `du -sh` on the cache volume that the directory stays under the cap and the oldest tracks are gone. **Restore `RYZIC_CACHE_MAX_GB` to your previous value afterwards.**
 - [ ] The currently-playing file is **never** evicted even when the cap is exceeded (queue a long track on a tight cap and confirm playback continues without error).
 
 ## Error handling
 
-- [ ] `/play https://youtube.com.evil.com/watch?v=x` is rejected by the URL validator with `Only YouTube URLs are supported.`
+- [ ] `/play https://youtube.com.invalid/watch?v=x` is rejected by the URL validator with `Only YouTube URLs are supported.`
 - [ ] `/play <livestream_url>` is rejected with the livestream-not-supported message before any download starts.
 - [ ] `/play <private_video_url>` surfaces `That video is private.`
 - [ ] `/play <age_restricted_url>` surfaces `That video is age-restricted and can't be played.`
-- [ ] Simulated yt-dlp breakage (`docker compose exec ryzic pip install 'yt-dlp==0.0.1'` against a hot container, then `/play <track_with_cached_metadata>` for a track NOT in audio cache, and `/play <playlist>` for a playlist with cached metadata) yields friendly errors and the cached-playlist warning footer respectively. Restore with `docker compose restart ryzic`.
+- [ ] Simulated yt-dlp breakage: run `docker compose exec ryzic python -m pip install 'yt-dlp==2021.1.15'` against a hot container (a real-but-stale release that fails against current YouTube), then `/play <track_with_cached_metadata>` for a track NOT in audio cache, and `/play <playlist>` for a playlist with cached metadata. Both should yield friendly errors and the cached-playlist warning footer respectively. **Restore with `docker compose down && docker compose up -d --force-recreate`** — `restart` does **not** undo `pip install`, the broken package persists in the container layer.
 
 ## Discord-side rejections
 
-- [ ] `/play` from a stage channel is rejected with `Stage channels aren't supported.`
+- [ ] `/play` from a stage channel is rejected with `Stage channels aren't supported. Use a regular voice channel.`
 - [ ] `/play` from a DM never reaches the bot (Discord hides the command).
 - [ ] `/skip`, `/pause`, `/resume`, `/leave` from a user not in the bot's voice channel return the `Join <#channel>` ephemeral.
 
-## Restart behavior
-
-- [ ] `docker compose restart ryzic` mid-queue: cached audio files are retained on disk; the queue itself is empty (per-guild state is in-memory by design).
+Coverage and unit-test acceptance criteria (plan §11.9 / §11.10) are enforced in CI, not here.
 
 ## Sign-off
 

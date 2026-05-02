@@ -4,11 +4,11 @@ Thanks for taking the time. This file documents the workflow we expect for chang
 
 ## Commits
 
-ryzic uses [Conventional Commits](https://www.conventionalcommits.org/). The commit type drives the version bump that [release-please](https://github.com/googleapis/release-please) cuts:
+ryzic uses [Conventional Commits](https://www.conventionalcommits.org/). The commit type drives the version bump that [release-please](https://github.com/googleapis/release-please) cuts. Pre-1.0, the mapping is intentionally conservative — see [SEMVER.md](SEMVER.md) for rationale:
 
 - `fix:` → patch release.
-- `feat:` → minor release.
-- `feat!:` (or any commit with a `BREAKING CHANGE:` footer) → minor release pre-1.0, major release post-1.0. See [SEMVER.md](SEMVER.md).
+- `feat:` → patch release pre-1.0, minor release post-1.0.
+- `feat!:` (or any commit with a `BREAKING CHANGE:` footer) → minor release pre-1.0, major release post-1.0.
 - `chore:`, `docs:`, `test:`, `refactor:`, `ci:` → no release.
 
 Squash your branch into a single Conventional Commit at merge time, or keep individual commits each conventional — either is fine, as long as the final history on `main` is parseable.
