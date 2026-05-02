@@ -1,0 +1,62 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-broke
+    attributes:
+      label: What broke
+      description: A short description of the unexpected behavior.
+      placeholder: "/play hangs after 'Loading...' instead of starting playback."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Numbered steps to reproduce. Include the URL, command, or interaction sequence.
+      placeholder: |
+        1. /play https://www.youtube.com/watch?v=...
+        2. Wait 30s.
+        3. Bot reports nothing; queue is empty.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: ryzic-version
+    attributes:
+      label: ryzic version
+      description: Run `git describe --tags` in your clone, or note the docker image tag.
+      placeholder: "v0.1.0 / commit 0234b91"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - docker compose
+        - bare metal (uv run python -m ryzic)
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output from `docker compose logs ryzic` (and `lavalink` if relevant). Redact tokens before pasting.
+      render: shell
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Confirmations
+      options:
+        - label: I redacted any tokens, secrets, or PII before pasting logs.
+          required: true
+        - label: I checked existing issues for duplicates.
+          required: true
