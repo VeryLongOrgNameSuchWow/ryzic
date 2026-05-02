@@ -8,7 +8,7 @@ import dotenv
 import hikari
 import lightbulb
 
-from . import config
+from . import config, lavalink_glue
 
 _log = logging.getLogger(__name__)
 
@@ -47,7 +47,15 @@ def main() -> None:
         intents=hikari.Intents.GUILDS | hikari.Intents.GUILD_VOICE_STATES,
     )
     client = _build_client(bot, cfg)
-    bot.subscribe(hikari.StartingEvent, client.start)
+    lavalink_glue.register_listeners(bot, cfg)
+
+    async def _on_starting(_: hikari.StartingEvent) -> None:
+        # Extensions register commands; commands are synced inside
+        # ``client.start``, so load before starting.
+        await client.load_extensions("ryzic.commands.lltest")
+        await client.start()
+
+    bot.subscribe(hikari.StartingEvent, _on_starting)
     bot.subscribe(hikari.StoppingEvent, client.stop)
 
     bot.run()
