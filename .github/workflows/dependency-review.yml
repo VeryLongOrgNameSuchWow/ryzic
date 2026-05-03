@@ -1,0 +1,34 @@
+name: Dependency Review
+
+# Catches license drift on every PR that changes the dependency surface
+# (`pyproject.toml` or `uv.lock`). License surprises — e.g. a transitive bump
+# from MIT to AGPL — are invisible to Dependabot, which only watches CVEs.
+# Catching them at PR time is cheaper than discovering them in a release audit.
+#
+# CVE catch is a secondary benefit; Dependabot already opens PRs for known
+# advisories on a daily cadence, so this isn't the primary defense there.
+#
+# `dependency-review-action` requires GitHub Advanced Security on private
+# repos but is free on public ones. The repo is currently public, so it
+# runs unconditionally; if the visibility ever flips back to private the
+# workflow will fail loudly until GHAS is enabled (or this file is removed),
+# which is the right behavior — silently dropping a security gate is worse.
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: read
+  pull-requests: write   # required to post the inline review summary comment
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
+        with:
+          comment-summary-in-pr: on-failure
