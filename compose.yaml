@@ -1,6 +1,9 @@
 services:
   ryzic:
-    build: .
+    # Pinned to the `:0.1` minor tag: `docker compose pull` picks up 0.1.x
+    # patch releases automatically. Bumping to a future `:0.2` is a manual
+    # edit — pre-1.0 minor bumps may include breaking changes (see SEMVER.md).
+    image: ghcr.io/verylongorgnamesuchwow/ryzic:0.1
     depends_on:
       lavalink:
         condition: service_healthy
