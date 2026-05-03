@@ -107,6 +107,7 @@ All configuration is via environment variables (read from `.env` by `docker comp
 | `RYZIC_CACHE_MAX_GB` | no | `5` | LRU eviction kicks in once cached audio exceeds this size (GiB). |
 | `RYZIC_LOG_LEVEL` | no | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
 | `RYZIC_GUILD_IDS` | no | unset | Comma-separated guild IDs for instant slash-command registration. Unset = global registration (up to 1h propagation). |
+| `RYZIC_AUTOLEAVE_SECONDS` | no | `300` | Seconds to wait after the queue empties before disconnecting from voice. `0` disables auto-leave entirely (24/7 ambient music deployments). |
 | `RYZIC_YOUTUBE_COOKIES_PATH` | no | unset | Opt-in path to a YouTube `cookies.txt` (Netscape format). Unset = no cookies sent. **Read [Self-hoster considerations](#opt-in-youtube-cookies-for-age-restricted--private-content) before enabling.** |
 
 ## Upgrading

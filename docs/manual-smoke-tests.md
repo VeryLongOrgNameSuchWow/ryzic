@@ -30,6 +30,7 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 
 - [ ] After the final track in a queue ends, the bot stays connected briefly, then disconnects after ~5 minutes of idle and posts `Idle for 5 minutes — disconnecting.` in the channel where `/play` was last used.
 - [ ] `/play` during the idle window cancels the timer; the bot does not disconnect.
+- [ ] (Optional) Set `RYZIC_AUTOLEAVE_SECONDS=0` in `.env`, `docker compose up -d`, queue then drain a track. The bot stays connected indefinitely (24/7 ambient mode). **Restore `RYZIC_AUTOLEAVE_SECONDS` afterwards.**
 
 ## Cache behavior
 

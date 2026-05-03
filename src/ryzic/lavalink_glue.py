@@ -4,9 +4,9 @@ The library ships no hikari adapter. We translate hikari voice events into
 the discord.py-shaped dicts that ``lavalink.Client.voice_update_handler``
 expects, and we own the per-guild state that the player API does not track:
 the last text channel that issued ``/play`` (so error messages have somewhere
-to land), the cancellable 5-minute auto-leave timers, and the
-``asyncio.Event`` per guild that lets ``/play`` block on the voice handshake
-before calling ``player.play()``.
+to land), the cancellable post-queue auto-leave timers (configurable via
+``RYZIC_AUTOLEAVE_SECONDS``), and the ``asyncio.Event`` per guild that lets
+``/play`` block on the voice handshake before calling ``player.play()``.
 
 State lives at module scope rather than in a ``GuildState`` registry: there
 are only three fields, none cross-reference each other, and an extra layer
@@ -56,8 +56,15 @@ from . import audio_cache, config
 _log = logging.getLogger(__name__)
 
 
-AUTO_LEAVE_SECONDS = 300
+DEFAULT_AUTO_LEAVE_SECONDS = 300
 VOICE_READY_TIMEOUT_SECONDS = 5.0
+
+# Mutated once at startup by ``register_listeners`` from ``cfg.auto_leave_seconds``.
+# Module-level by design (mirrors the ``_ll_client`` singleton): the auto-leave
+# task is fire-and-forget by ``EventHandler.on_queue_end``, so the value has to
+# be reachable without lugging cfg through every event hook. ``0`` means the
+# operator opted out of the timer entirely.
+_auto_leave_seconds: int = DEFAULT_AUTO_LEAVE_SECONDS
 
 # Defense in depth: only forward voice endpoints that look like Discord's voice
 # infrastructure. Anything else (a hypothetical compromised gateway) is dropped
@@ -123,19 +130,26 @@ def _cancel_auto_leave(guild_id: int) -> None:
 
 
 def _start_auto_leave(bot: hikari.GatewayBot, guild_id: int) -> None:
-    """Schedule a 5-minute disconnect timer for ``guild_id``.
+    """Schedule the disconnect timer for ``guild_id``.
 
     Replaces any existing timer for the same guild so the user always gets
-    five fresh minutes after the most recent ``QueueEndEvent``.
+    a fresh window after the most recent ``QueueEndEvent``. When the
+    operator has set ``RYZIC_AUTOLEAVE_SECONDS=0`` the timer is disabled
+    entirely — any existing timer is still cancelled (so a mid-flight
+    config change doesn't leave a stale 300s task armed) and no
+    replacement is scheduled.
     """
     _cancel_auto_leave(guild_id)
+    if _auto_leave_seconds <= 0:
+        return
     auto_leave_tasks[guild_id] = asyncio.create_task(
-        _auto_leave(bot, guild_id), name=f"ryzic-auto-leave-{guild_id}"
+        _auto_leave(bot, guild_id, _auto_leave_seconds),
+        name=f"ryzic-auto-leave-{guild_id}",
     )
 
 
-async def _auto_leave(bot: hikari.GatewayBot, guild_id: int) -> None:
-    await asyncio.sleep(AUTO_LEAVE_SECONDS)
+async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> None:
+    await asyncio.sleep(seconds)
 
     # Self-pop is best-effort; a concurrent _cancel_auto_leave / _start_auto_leave
     # may have already replaced the entry, so only clear ourselves out.
@@ -155,7 +169,22 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int) -> None:
         _log.exception("auto-leave: failed to disconnect from guild %d", guild_id)
 
     _reset_voice_ready(guild_id)
-    await _send_to_last_play_channel(bot, guild_id, "Idle for 5 minutes — disconnecting.")
+    await _send_to_last_play_channel(
+        bot, guild_id, f"Idle for {_format_idle_duration(seconds)} — disconnecting."
+    )
+
+
+def _format_idle_duration(seconds: int) -> str:
+    """Render the idle duration in the most natural unit for the user-facing message.
+
+    Whole minutes (300, 60, 600, ...) render as ``"5 minutes"``; everything
+    else renders as seconds. Prevents ``"Idle for 300 seconds"`` for the
+    default while still being correct for ``RYZIC_AUTOLEAVE_SECONDS=45``.
+    """
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = seconds // 60
+        return "1 minute" if minutes == 1 else f"{minutes} minutes"
+    return "1 second" if seconds == 1 else f"{seconds} seconds"
 
 
 async def _send_to_last_play_channel(bot: hikari.GatewayBot, guild_id: int, content: str) -> None:
@@ -332,7 +361,17 @@ class EventHandler:
     @lavalink.listener(lavalink.QueueEndEvent)
     async def on_queue_end(self, event: lavalink.QueueEndEvent) -> None:
         guild_id = event.player.guild_id
-        _log.info("guild=%d queue-end; arming %ds auto-leave", guild_id, AUTO_LEAVE_SECONDS)
+        if _auto_leave_seconds <= 0:
+            _log.info(
+                "guild=%d queue-end; auto-leave disabled (RYZIC_AUTOLEAVE_SECONDS=0)",
+                guild_id,
+            )
+        else:
+            _log.info(
+                "guild=%d queue-end; arming %ds auto-leave",
+                guild_id,
+                _auto_leave_seconds,
+            )
         _start_auto_leave(self._bot, guild_id)
 
     @lavalink.listener(lavalink.WebSocketClosedEvent)
@@ -525,8 +564,14 @@ def _build_lavalink_client(
 def register_listeners(bot: hikari.GatewayBot, cfg: config.Config) -> None:
     """Subscribe the voice bridge + node bootstrap listeners onto ``bot``.
 
+    Also installs the per-process auto-leave window from
+    ``cfg.auto_leave_seconds`` so ``EventHandler.on_queue_end`` (which has
+    no cfg in scope) can read it without indirection.
+
     Idempotent across calls is NOT guaranteed; call once at startup.
     """
+    global _auto_leave_seconds
+    _auto_leave_seconds = cfg.auto_leave_seconds
 
     async def _shard_ready(event: hikari.ShardReadyEvent) -> None:
         await _on_shard_ready(bot, cfg, event)
@@ -543,10 +588,18 @@ def _set_lavalink_client_for_test(client: lavalink.Client | None) -> None:
     _ll_client = client
 
 
+def _set_auto_leave_seconds_for_test(seconds: int) -> None:
+    """Test-only: override the per-process auto-leave window."""
+    global _auto_leave_seconds
+    _auto_leave_seconds = seconds
+
+
 def _reset_state_for_test() -> None:
+    global _auto_leave_seconds
     for task in auto_leave_tasks.values():
         if not task.done():
             task.cancel()
     last_play_channel.clear()
     auto_leave_tasks.clear()
+    _auto_leave_seconds = DEFAULT_AUTO_LEAVE_SECONDS
     _voice_ready_events.clear()

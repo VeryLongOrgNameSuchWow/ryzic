@@ -4,7 +4,7 @@
 
 `ryzic` is a self-hostable Discord music bot. Stack: Python 3.13, hikari (gateway), hikari-lightbulb v3 (slash commands), lavalink.py (Devoxin client to a Lavalink Java audio server), yt-dlp, python-dotenv, aiosqlite. MIT-licensed. The intended deployment is `git clone` + `docker compose up -d` per self-hosted instance — not a published library.
 
-The audio path: yt-dlp downloads to a local LRU cache, Lavalink plays from the local file via `LocalAudioSourceManager`. Per-guild queue. **No TTL on the audio cache** — it's deliberately "unsinkable when yt-dlp breaks between patches." Playlist metadata cache is live-first with a TTL fallback. Auto-leave 5min after queue ends.
+The audio path: yt-dlp downloads to a local LRU cache, Lavalink plays from the local file via `LocalAudioSourceManager`. Per-guild queue. **No TTL on the audio cache** — it's deliberately "unsinkable when yt-dlp breaks between patches." Playlist metadata cache is live-first with a TTL fallback. Auto-leave 5min after queue ends (configurable via `RYZIC_AUTOLEAVE_SECONDS`; `0` disables).
 
 ## Commands
 
@@ -26,7 +26,7 @@ Module map (`src/ryzic/`):
 
 - `bot.py` — entrypoint, lifecycle, command/extension load.
 - `config.py` — env-var dataclass, fail-fast at startup.
-- `lavalink_glue.py` — voice-update bridge, `EventHandler`, node bootstrap, 5-min auto-leave timer, per-guild state dicts, Discord endpoint allowlist.
+- `lavalink_glue.py` — voice-update bridge, `EventHandler`, node bootstrap, configurable post-queue auto-leave timer (`RYZIC_AUTOLEAVE_SECONDS`), per-guild state dicts, Discord endpoint allowlist.
 - `audio_cache.py` — sqlite-backed LRU + per-video lock; `get_or_download` / `release` / `sweep_orphans`.
 - `playlist_cache.py` — module functions for playlist metadata, live-first with 24h TTL fallback.
 - `ytdlp.py` — yt-dlp wrapper, friendly error mapping per the UX spec.
