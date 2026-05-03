@@ -26,6 +26,10 @@ class Config:
     cache_max_gb: int
     log_level: str
     guild_ids: tuple[int, ...]
+    # Seconds to wait after ``QueueEndEvent`` before disconnecting from
+    # voice. ``0`` disables the timer entirely (24/7 ambient music
+    # deployments). Default ``300`` preserves the historical behaviour.
+    auto_leave_seconds: int = 300
     # ``repr=False`` matches ``discord_bot_token`` / ``lavalink_password``:
     # the path itself is operator-controlled and not a credential, but it
     # points at a file containing live YouTube session tokens, so any
@@ -69,6 +73,25 @@ def _parse_positive_int(name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer, got {raw!r}") from exc
     if value < 1:
         raise ConfigError(f"{name} must be >= 1, got {value}")
+    return value
+
+
+def _parse_non_negative_int(name: str, default: int) -> int:
+    """Parse an int env var allowing ``0``.
+
+    Distinct from :func:`_parse_positive_int` because ``RYZIC_AUTOLEAVE_SECONDS``
+    treats ``0`` as a meaningful sentinel (disables the auto-leave timer)
+    rather than a misconfiguration.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be an integer, got {raw!r}") from exc
+    if value < 0:
+        raise ConfigError(f"{name} must be >= 0, got {value}")
     return value
 
 
@@ -125,5 +148,6 @@ def load() -> Config:
         cache_max_gb=_parse_positive_int("RYZIC_CACHE_MAX_GB", 5),
         log_level=_parse_log_level(os.environ.get("RYZIC_LOG_LEVEL")),
         guild_ids=_parse_guild_ids(os.environ.get("RYZIC_GUILD_IDS")),
+        auto_leave_seconds=_parse_non_negative_int("RYZIC_AUTOLEAVE_SECONDS", 300),
         youtube_cookies_path=_parse_existing_file("RYZIC_YOUTUBE_COOKIES_PATH"),
     )

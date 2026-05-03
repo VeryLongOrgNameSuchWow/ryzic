@@ -18,7 +18,7 @@ import hikari
 import lavalink
 import pytest
 
-from ryzic import lavalink_glue
+from ryzic import config, lavalink_glue
 from tests._command_helpers import RecordingCache
 
 
@@ -389,6 +389,124 @@ async def test_auto_leave_replaces_existing_timer() -> None:
     assert first_task.cancelled()
     # Tidy up — leaving the second task in the loop leaks a 300s sleep.
     lavalink_glue._cancel_auto_leave(111)
+
+
+async def test_auto_leave_seconds_zero_skips_scheduling() -> None:
+    """``RYZIC_AUTOLEAVE_SECONDS=0`` (issue #62) must not arm a timer.
+
+    A 0-second sleep would fire immediately and disconnect right after
+    QueueEnd — the opposite of the operator's intent (24/7 ambient).
+    """
+    bot = _FakeApp()
+    lavalink_glue._set_auto_leave_seconds_for_test(0)
+    lavalink_glue._start_auto_leave(cast(hikari.GatewayBot, bot), 111)
+    assert 111 not in lavalink_glue.auto_leave_tasks
+
+
+async def test_auto_leave_seconds_zero_still_cancels_existing_timer() -> None:
+    """Mid-flight reconfiguration must not leave a stale 300s task armed.
+
+    An operator who flips RYZIC_AUTOLEAVE_SECONDS=0 and restarts mid-queue
+    is unlikely, but the contract holds: ``_start_auto_leave`` cancels
+    first, then conditionally schedules.
+    """
+    bot = _FakeApp()
+    lavalink_glue._start_auto_leave(cast(hikari.GatewayBot, bot), 111)
+    first_task = lavalink_glue.auto_leave_tasks[111]
+
+    lavalink_glue._set_auto_leave_seconds_for_test(0)
+    lavalink_glue._start_auto_leave(cast(hikari.GatewayBot, bot), 111)
+    assert 111 not in lavalink_glue.auto_leave_tasks
+
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+    assert first_task.cancelled()
+
+
+async def test_auto_leave_seconds_default_uses_300_second_sleep() -> None:
+    """Default wiring schedules with the 300s window."""
+    bot = _FakeApp()
+    lavalink_glue._start_auto_leave(cast(hikari.GatewayBot, bot), 111)
+    task = lavalink_glue.auto_leave_tasks[111]
+    assert not task.done()
+    # Tidy up so the 300s sleep doesn't outlive the test under pytest-randomly.
+    lavalink_glue._cancel_auto_leave(111)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_auto_leave_seconds_custom_value_passed_into_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-default RYZIC_AUTOLEAVE_SECONDS value reaches ``_auto_leave``."""
+    bot = _FakeApp()
+    lavalink_glue._set_auto_leave_seconds_for_test(45)
+
+    captured: list[int] = []
+    real_sleep = asyncio.sleep
+
+    async def _spy_sleep(seconds: int) -> None:
+        captured.append(seconds)
+        # Yield control immediately so the task progresses without actually
+        # blocking 45 wall-clock seconds.
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _spy_sleep)
+    lavalink_glue._start_auto_leave(cast(hikari.GatewayBot, bot), 111)
+    task = lavalink_glue.auto_leave_tasks[111]
+    await task
+    assert captured == [45]
+
+
+async def test_register_listeners_installs_auto_leave_seconds_from_cfg() -> None:
+    """``register_listeners`` must propagate ``cfg.auto_leave_seconds`` into the module."""
+    cfg = config.Config(
+        discord_bot_token="x",
+        lavalink_host="lavalink",
+        lavalink_port=2333,
+        lavalink_password="x",
+        cache_dir=Path("/tmp"),
+        cache_max_gb=5,
+        log_level="INFO",
+        guild_ids=(),
+        auto_leave_seconds=42,
+    )
+    subscriptions: list[Any] = []
+
+    class _Bot:
+        def subscribe(self, event_type: Any, callback: Any) -> None:
+            subscriptions.append((event_type, callback))
+
+    lavalink_glue.register_listeners(cast(hikari.GatewayBot, _Bot()), cfg)
+    assert lavalink_glue._auto_leave_seconds == 42
+    # Sanity: the listener wiring still happens (4 subscriptions).
+    assert len(subscriptions) == 4
+
+
+async def test_queue_end_with_zero_seconds_logs_disabled_and_skips_timer() -> None:
+    """The QueueEnd handler must respect the disabled-timer setting end-to-end."""
+    bot = _FakeApp()
+    lavalink_glue._set_auto_leave_seconds_for_test(0)
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+
+    @dataclass
+    class _Player:
+        guild_id: int = 111
+
+    @dataclass
+    class _Event:
+        player: _Player
+
+    await handler.on_queue_end(cast(lavalink.QueueEndEvent, _Event(player=_Player())))
+    assert 111 not in lavalink_glue.auto_leave_tasks
+
+
+def test_format_idle_duration_renders_minutes_and_seconds() -> None:
+    """User-facing message picks the natural unit."""
+    assert lavalink_glue._format_idle_duration(300) == "5 minutes"
+    assert lavalink_glue._format_idle_duration(60) == "1 minute"
+    assert lavalink_glue._format_idle_duration(45) == "45 seconds"
+    assert lavalink_glue._format_idle_duration(1) == "1 second"
 
 
 async def test_send_to_last_play_channel_drops_stale_channel_on_not_found() -> None:
