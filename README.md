@@ -107,6 +107,7 @@ All configuration is via environment variables (read from `.env` by `docker comp
 | `RYZIC_CACHE_MAX_GB` | no | `5` | LRU eviction kicks in once cached audio exceeds this size (GiB). |
 | `RYZIC_LOG_LEVEL` | no | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
 | `RYZIC_GUILD_IDS` | no | unset | Comma-separated guild IDs for instant slash-command registration. Unset = global registration (up to 1h propagation). |
+| `RYZIC_YOUTUBE_COOKIES_PATH` | no | unset | Opt-in path to a YouTube `cookies.txt` (Netscape format). Unset = no cookies sent. **Read [Self-hoster considerations](#opt-in-youtube-cookies-for-age-restricted--private-content) before enabling.** |
 
 ## Upgrading
 
@@ -134,10 +135,29 @@ A successful verification proves the image was built by this repo's release work
 
 ## Self-hoster considerations
 
-- **YouTube cookies are deliberately disabled.** Enabling them lets a deployment fetch age-restricted/private content under your account, which is a security and account-safety risk. There is no env var to enable them in M1; if you need them, fork and review the change carefully first.
+- **YouTube cookies are disabled by default.** Enabling them lets a deployment fetch age-restricted/private content under your account, which is a security and account-safety risk. The opt-in escape hatch is documented below — read it before flipping the env var.
 - **The cache directory holds copyrighted material.** What you cache and how long you keep it is your responsibility. Default eviction is by least-recently-used at the `RYZIC_CACHE_MAX_GB` threshold.
 - **No rate limiting in this release.** Anyone in your server who can run slash commands can fill your queue or your disk. If you don't trust everyone, restrict command access via Discord's built-in **Server Settings** → **Integrations** permissions before exposing the bot widely.
 - **Single-instance only.** The audio cache, playlist cache, and per-guild state assume exactly one ryzic process per cache directory. Don't run two replicas against the same volume.
+
+### Opt-in: YouTube cookies for age-restricted / private content
+
+`RYZIC_YOUTUBE_COOKIES_PATH`. When set, ryzic uses the cookies-file at this path on every yt-dlp call.
+
+**Read this before enabling**: anyone who can run a slash command on your bot can now fetch any video your YouTube account can see — including private uploads, age-restricted content, and YouTube Premium-only content. The cookies file effectively grants every `/play`-er a session as your account. Compromise of the bot host = compromise of your YouTube account. Do not enable on a server you don't fully control. If you suspect the bot host was ever compromised while cookies were active, sign out all sessions on the YouTube account (Google → Manage your Google Account → Security → Your devices) and re-export a fresh cookies file.
+
+Generate cookies via a browser extension (e.g. Get cookies.txt LOCALLY) and store them outside the bot's working directory. Mount as a read-only bind into the container — for example, add to your `compose.yaml` under `services.ryzic`:
+
+```yaml
+    environment:
+      RYZIC_YOUTUBE_COOKIES_PATH: /etc/ryzic/youtube-cookies.txt
+    volumes:
+      - /path/on/host/youtube-cookies.txt:/etc/ryzic/youtube-cookies.txt:ro
+```
+
+ryzic copies the file into its private cache directory at startup so YouTube's session-refresh writes stay contained — your source file at the bind-mount path is never modified.
+
+Unset (the default) preserves the cookie-less behaviour described above.
 
 ## Development
 

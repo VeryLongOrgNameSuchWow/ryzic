@@ -93,15 +93,41 @@ def validate_video_id(video_id: str) -> None:
         raise InvalidVideoID(f"video_id failed validation: {video_id!r}")
 
 
+# Module-level singleton: ``bot.py`` reads the opt-in
+# ``RYZIC_YOUTUBE_COOKIES_PATH`` env var at startup and installs the
+# resolved path here so ``_base_opts`` can fold it into every yt-dlp
+# call without threading the config through every caller. Symmetric
+# to ``audio_cache.set_audio_cache``. Unset = the safe, cookie-less
+# default documented in the README.
+_COOKIES_PATH: Path | None = None
+
+
+def set_cookies_path(path: Path | None) -> None:
+    """Install (or clear) the opt-in YouTube cookies file path.
+
+    When set, every subsequent yt-dlp invocation passes ``cookiefile``
+    pointing at ``path``. When ``None`` (the default), no cookies are
+    sent — preserving the security posture documented in the README.
+
+    SECURITY: enabling this lets any user who can run a slash command
+    fetch any video the cookies' YouTube account can see (private,
+    age-restricted, Premium-only). See the README's "Self-hoster
+    considerations" section before installing a non-``None`` path.
+    """
+    global _COOKIES_PATH
+    _COOKIES_PATH = path
+
+
 def _base_opts() -> dict[str, Any]:
     """Build the frozen yt-dlp options dict (per M1 §6).
 
     Format priority constrains output to known-good Lavaplayer codecs
-    (review §6 LOAD_FAILED on exotic codecs). Cookies (``cookiefile``
-    AND ``cookiesfrombrowser``) MUST stay disabled — see §6 security
-    item 13.
+    (review §6 LOAD_FAILED on exotic codecs). ``cookiesfrombrowser``
+    stays disabled unconditionally (browser extraction is well outside
+    the bot's blast radius). ``cookiefile`` is opt-in via
+    :func:`set_cookies_path`; absent by default.
     """
-    return {
+    opts: dict[str, Any] = {
         "format": ("bestaudio[ext=m4a]/bestaudio[ext=opus]/bestaudio[ext=webm]/bestaudio"),
         "noplaylist": True,
         "extract_flat": False,
@@ -113,11 +139,10 @@ def _base_opts() -> dict[str, Any]:
         "geo_bypass": False,
         "max_filesize": 500_000_000,
         "playlist_items": "1-1000",
-        # SECURITY: cookies (both file-based and browser-extracted) are
-        # deliberately disabled. Enabling either exposes the host's
-        # YouTube session to any URL the bot resolves; out of M1 scope
-        # and requires its own security review before flipping.
-        "cookiefile": None,
+        # SECURITY: browser-extracted cookies stay unconditionally
+        # disabled. The file-based opt-in below is the only supported
+        # path; browser extraction would imply scanning the host's
+        # profile dirs, well outside the bot's blast radius.
         "cookiesfrombrowser": None,
         # SECURITY: disable yt-dlp's plugin auto-loader. The default
         # (``['default']``) scans config dirs and ``sys.path`` for
@@ -131,6 +156,11 @@ def _base_opts() -> dict[str, Any]:
         # watch/youtu.be URLs; ``youtube:tab`` covers playlists.
         "allowed_extractors": ["youtube", "youtube:tab"],
     }
+    if _COOKIES_PATH is not None:
+        # Opt-in only; unset = no key at all, preserving the
+        # cookie-less default. yt-dlp owns format validation.
+        opts["cookiefile"] = str(_COOKIES_PATH)
+    return opts
 
 
 def _is_livestream(info: dict[str, Any]) -> bool:
