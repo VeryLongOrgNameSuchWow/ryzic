@@ -504,6 +504,7 @@ async def test_queue_end_with_zero_seconds_logs_disabled_and_skips_timer() -> No
 def test_format_idle_duration_renders_minutes_and_seconds() -> None:
     """User-facing message picks the natural unit."""
     assert lavalink_glue._format_idle_duration(300) == "5 minutes"
+    assert lavalink_glue._format_idle_duration(120) == "2 minutes"
     assert lavalink_glue._format_idle_duration(60) == "1 minute"
     assert lavalink_glue._format_idle_duration(45) == "45 seconds"
     assert lavalink_glue._format_idle_duration(1) == "1 second"

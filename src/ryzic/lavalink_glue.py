@@ -595,15 +595,11 @@ def _set_auto_leave_seconds_for_test(seconds: int) -> None:
 
 
 def _reset_state_for_test() -> None:
+    global _auto_leave_seconds
     for task in auto_leave_tasks.values():
         if not task.done():
             task.cancel()
     last_play_channel.clear()
     auto_leave_tasks.clear()
-    _auto_leave_seconds_reset()
-    _voice_ready_events.clear()
-
-
-def _auto_leave_seconds_reset() -> None:
-    global _auto_leave_seconds
     _auto_leave_seconds = DEFAULT_AUTO_LEAVE_SECONDS
+    _voice_ready_events.clear()
