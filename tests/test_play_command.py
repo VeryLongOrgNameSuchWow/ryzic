@@ -444,6 +444,11 @@ async def test_single_track_success_idle_plays_now(cache: Any) -> None:
     assert isinstance(embed, hikari.Embed)
     assert embed.title == "Queued"
     assert "playing now" in (embed.footer.text if embed.footer else "")
+    # Channel + requester surface as inline mention fields so users see
+    # which voice channel ryzic joined and who triggered playback.
+    field_pairs = {f.name: f.value for f in embed.fields}
+    assert field_pairs["Channel"] == "<#999>"
+    assert field_pairs["Requested by"] == "<@222>"
     # /play also seeded the last_play_channel for the EventHandler
     # error reporter to land in the right text channel.
     assert lavalink_glue.last_play_channel.get(111) == 555

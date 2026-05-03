@@ -248,6 +248,8 @@ async def _play_single(
         track_info,
         position=queue_len_before + 1,
         playing_now=not was_playing,
+        channel_id=channel_id,
+        requester_id=ctx.user.id,
     )
     await ctx.respond(embed=embed)
 
