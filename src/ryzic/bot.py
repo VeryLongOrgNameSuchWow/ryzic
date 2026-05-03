@@ -56,6 +56,10 @@ def _install_youtube_cookies(cfg: config.Config) -> None:
     periodically re-export.
     """
     if cfg.youtube_cookies_path is None:
+        # Remove a scratch copy left by a previous run that had cookies enabled,
+        # so unsetting the env var fully matches the operator's mental model
+        # ("cookies disabled") rather than leaving a stale credential on disk.
+        (cfg.cache_dir / _COOKIES_SCRATCH_FILENAME).unlink(missing_ok=True)
         ytdlp.set_cookies_path(None)
         return
 

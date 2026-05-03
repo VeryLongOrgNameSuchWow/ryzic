@@ -169,6 +169,20 @@ def test_install_cookies_does_not_modify_source(tmp_path: Path) -> None:
     assert source.read_text() == pristine
 
 
+def test_install_cookies_unset_unlinks_stale_scratch(tmp_path: Path) -> None:
+    # Operator had cookies enabled in a previous run (scratch copy on disk),
+    # then unset RYZIC_YOUTUBE_COOKIES_PATH and restarted. The helper must
+    # remove the stale scratch so "env var unset" matches "no credential on
+    # disk" — see security re-review on PR #51.
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    scratch = cache_dir / bot._COOKIES_SCRATCH_FILENAME
+    scratch.write_text("# leftover from previous run\nsome=value\n")
+    cfg = _make_cfg(cache_dir=cache_dir, cookies_path=None)
+    bot._install_youtube_cookies(cfg)
+    assert not scratch.exists()
+
+
 def test_install_cookies_creates_cache_dir_if_missing(tmp_path: Path) -> None:
     # First-startup ordering: ``_install_youtube_cookies`` runs before
     # ``_bootstrap_audio_cache``, so the cache_dir may not yet exist.
