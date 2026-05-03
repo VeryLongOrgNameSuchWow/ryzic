@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.1.1...v0.2.0) (2026-05-03)
+
+
+### Features
+
+* **ytdlp:** add opt-in RYZIC_YOUTUBE_COOKIES_PATH env var for cookies-gated content ([#51](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/51)) ([c470ae6](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/c470ae682e84fcaab8a46eb4702e6d99c92eca5c))
+
 ## [0.1.1](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.1.0...v0.1.1) (2026-05-03)
 
 
