@@ -27,7 +27,7 @@ services:
       - lavalink_plugins:/opt/Lavalink/plugins
       - cache:/var/cache/ryzic:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2333/version"]
+      test: ["CMD-SHELL", "wget -q --spider --header=\"Authorization: $$LAVALINK_SERVER_PASSWORD\" http://localhost:2333/version"]
       interval: 10s
       timeout: 3s
       retries: 5
