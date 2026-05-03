@@ -35,17 +35,30 @@ _VIDEO_ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
 # and intentionally excluded.
 _LIVE_STATUSES: Final = frozenset({"is_live", "is_upcoming"})
 
+_LIVESTREAM_MESSAGE: Final = "Livestreams are not supported in this version."
+_UNSUPPORTED_URL_MESSAGE: Final = "Only YouTube URLs are supported."
+
 # User-facing sentences per M1 §3. Exact strings are part of the
 # wrapper's contract: ``/play`` displays them verbatim. Substring-matched
 # against the first line of yt-dlp's ``DownloadError``.
+#
+# ``Requested format is not available`` is a heuristic livestream marker
+# (issue #47): YouTube live streams expose only HLS manifests, not the
+# progressive ``bestaudio[ext=m4a]/...`` formats the wrapper requests, so
+# yt-dlp raises this error during format selection before the metadata
+# dict (which would carry ``is_live: True``) is returned. Without the
+# mapping, the explicit ``_is_livestream`` check in ``resolve_track`` /
+# ``download`` never runs for live URLs and operators see a raw yt-dlp
+# passthrough instead of the friendly rejection. The string is also
+# emitted for genuinely-unavailable formats on non-live videos, but in
+# practice the ``bestaudio`` fallback chain always resolves for VODs, so
+# treating it as a livestream marker is safe in this configuration.
 _FRIENDLY_ERRORS: Final[dict[str, str]] = {
     "Sign in to confirm your age": "That video is age-restricted and can't be played.",
     "Private video": "That video is private.",
     "Video unavailable": "That video is not available in this region.",
+    "Requested format is not available": _LIVESTREAM_MESSAGE,
 }
-
-_LIVESTREAM_MESSAGE: Final = "Livestreams are not supported in this version."
-_UNSUPPORTED_URL_MESSAGE: Final = "Only YouTube URLs are supported."
 
 # Cap and scrub yt-dlp error fragments before they surface to users.
 # Backticks are stripped so the embed builder can wrap the message in an

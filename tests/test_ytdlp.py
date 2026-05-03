@@ -189,6 +189,16 @@ async def test_resolve_track_rejects_unsupported_url(tmp_path: Path) -> None:
             "ERROR: [youtube] X: Video unavailable. The uploader has not made it available.",
             "That video is not available in this region.",
         ),
+        # Issue #47: livestreams trip yt-dlp's format selector before the
+        # metadata dict (with ``is_live: True``) is returned, so the explicit
+        # ``_is_livestream`` guard never runs. Map the format-selection error
+        # to the friendly livestream message so operators see why the URL was
+        # rejected.
+        (
+            "ERROR: [youtube] 4RmaQsA9FYs: Requested format is not available. "
+            "Use --list-formats for a list of available formats",
+            "Livestreams are not supported in this version.",
+        ),
     ],
 )
 async def test_resolve_track_maps_known_errors(raw: str, expected: str, tmp_path: Path) -> None:
