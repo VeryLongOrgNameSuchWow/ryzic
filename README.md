@@ -73,6 +73,8 @@ The first boot pulls the ryzic + Lavalink images and downloads the `youtube-sour
 docker compose logs -f
 ```
 
+See [Upgrading](#upgrading) for how the `:0.1` pin behaves on subsequent `docker compose pull`s.
+
 ### 4. Try it
 
 Join a voice channel, then in any text channel the bot can see:
