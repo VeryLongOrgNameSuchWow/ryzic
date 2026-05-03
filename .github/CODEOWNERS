@@ -1,0 +1,7 @@
+# Default owner for the repo. GitHub will request a review from this
+# account on every PR. The current branch ruleset doesn't require
+# code-owner reviews to merge, so this is informational only — change
+# the ruleset (Settings → Rules) if you want it as a hard gate.
+#
+# Single-maintainer project — keep this list small and accurate.
+* @VeryLongNicknameSuchWow
