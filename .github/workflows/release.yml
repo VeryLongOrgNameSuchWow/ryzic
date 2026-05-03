@@ -94,7 +94,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISPATCH_TAG: ${{ github.event.inputs.tag }}
-          IMAGE_DIGEST: ${{ steps.meta.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           tag="${DISPATCH_TAG:-${GITHUB_REF#refs/tags/}}"
           # Only append if the release exists. Skip silently otherwise (manual
