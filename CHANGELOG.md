@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.1.0...v0.1.1) (2026-05-03)
+
+
+### Bug Fixes
+
+* **ytdlp:** map yt-dlp 'Requested format is not available' to friendly livestream rejection ([#48](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/48)) ([13caa53](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/13caa53ea7678c1d2cdf5fea4a977238ccb75232))
+
+
+### Documentation
+
+* **readme:** document gh attestation verify for SLSA-signed images ([#50](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/50)) ([d694b77](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/d694b777c39159a09ebc3f95b9cfabe2de019e09))
+
 ## 0.1.0 (2026-05-03)
 
 
