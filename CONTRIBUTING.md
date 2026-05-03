@@ -41,6 +41,16 @@ Forward-looking planning lives in GitHub Issues. See [#13](https://github.com/Ve
 - Secrets in commits (tokens, `.env`, signing keys). `.gitignore` lists the obvious patterns; if you find yourself fighting it, stop and ask.
 - New runtime dependencies without a justification in the PR body.
 
+## Action pinning
+
+GitHub Actions pins must use the **commit SHA**, not the annotated tag-object SHA. The Actions runner accepts either, but OSSF Scorecard's webapp verification rejects tag-object SHAs as `imposter commit` and silently tanks the score. To resolve a tag to its target commit:
+
+```bash
+git ls-remote https://github.com/<org>/<repo>.git refs/tags/vX.Y.Z^{}
+```
+
+The `^{}` suffix peels the annotated tag to the underlying commit. Dependabot already uses commit SHAs by default — this only matters when manually adding a new action pin.
+
 ## Manual smoke tests
 
 [docs/manual-smoke-tests.md](docs/manual-smoke-tests.md) is the checklist run before each release. PRs that touch the playback path should at minimum re-run the **Core playback** section locally and call out the result in the PR description.
