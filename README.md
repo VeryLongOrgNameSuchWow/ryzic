@@ -73,8 +73,6 @@ The first boot pulls the ryzic + Lavalink images and downloads the `youtube-sour
 docker compose logs -f
 ```
 
-`compose.yaml` pins the bot to the `:0.1` minor tag — `docker compose pull && docker compose up -d` picks up patch releases on the 0.1.x line. Bumping to a future `:0.2` is a manual edit, since pre-1.0 minor bumps may include breaking changes (see [SEMVER.md](SEMVER.md)).
-
 ### 4. Try it
 
 Join a voice channel, then in any text channel the bot can see:
@@ -115,7 +113,9 @@ docker compose pull
 docker compose up -d
 ```
 
-The image is pinned to `:latest` by default; pin to a specific `:vX.Y.Z` in your `compose.yaml` if you want manual control over upgrades. The audio + playlist cache (the `RYZIC_CACHE_DIR` bind mount) and the SQLite database inside it persist across upgrades — `docker compose pull` only replaces the image, not the volume.
+`compose.yaml` pins the bot to the `:0.1` minor tag, so `docker compose pull` picks up 0.1.x patch releases automatically. Bumping to a future `:0.2` is a manual edit — pre-1.0 minor bumps may include breaking changes (see [SEMVER.md](SEMVER.md)). Pin to a specific `:vX.Y.Z` if you want full manual control.
+
+The audio + playlist cache (the `RYZIC_CACHE_DIR` bind mount) and the SQLite database inside it persist across upgrades — `docker compose pull` only replaces the image, not the volume.
 
 ## Self-hoster considerations
 
