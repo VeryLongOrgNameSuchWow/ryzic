@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.2.1...v0.2.2) (2026-05-03)
+
+
+### Documentation
+
+* codify operator-decisions principle (CLAUDE.md + M1.md) ([#55](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/55)) ([09e11c5](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/09e11c5b6635a833edad9f0405581a97b3a5afe4))
+
 ## [0.2.1](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.2.0...v0.2.1) (2026-05-03)
 
 
