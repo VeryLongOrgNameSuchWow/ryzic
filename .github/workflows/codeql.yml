@@ -20,11 +20,6 @@ on:
     # onto every other GHA scheduled job firing at :00.
     - cron: "17 7 * * 1"
 
-permissions:
-  actions: read
-  contents: read
-  security-events: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -34,6 +29,10 @@ jobs:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     if: ${{ github.event.repository.visibility == 'public' }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write   # upload SARIF to code scanning
     strategy:
       fail-fast: false
       matrix:
