@@ -52,6 +52,12 @@ Tests:
 - **Pre-1.0 SemVer** — minor bumps may break. See `SEMVER.md`.
 - **Never commit secrets**. `.env` is gitignored, broader credential patterns too. `.env.example` only.
 
+## Principles
+
+**Operator decisions stay operator decisions.** Operator-level configuration (env vars, OAuth permissions, deploy choices) belongs to the self-hoster. ryzic does not ship slash commands that let server users override or manage operator decisions. The Discord Integrations panel is the user-facing knob; env vars are the operator-facing knob; nothing in slash-command space lives between them.
+
+In practice: no `/normalize on|off` (volume normalization is a global operator setting), no `/dj add @user` (DJ role assignment is `RYZIC_DJ_ROLE_ID`), no `/vc-status on|off` (voice-channel status is `RYZIC_VC_STATUS`).
+
 ## Env vars
 
 Canonical reference is `.env.example` and the env-var table in `README.md`. Required: `DISCORD_BOT_TOKEN`. Everything else has a default.
