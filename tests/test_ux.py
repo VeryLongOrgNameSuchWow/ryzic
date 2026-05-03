@@ -210,6 +210,10 @@ def test_playlist_embed_live_path() -> None:
     assert "4:00" in embed.description
     assert embed.footer is not None
     assert "alice" in (embed.footer.text or "")
+    # Regression guard: single-track embed (PR #75 / issue #69) added inline
+    # fields for channel + requester. Playlist embed deliberately stays
+    # field-free — keep the asymmetry explicit until/unless we harmonize.
+    assert embed.fields == []
 
 
 def test_playlist_embed_partial_failure_appends_footer_line() -> None:
