@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.2.0...v0.2.1) (2026-05-03)
+
+
+### Bug Fixes
+
+* **ci:** use commit SHA (not tag-object SHA) for codeql-action pins ([#53](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/53)) ([a0df750](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/a0df75057c8d99636e7f7dd6617f53fce7e7ac95))
+
 ## [0.2.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.1.1...v0.2.0) (2026-05-03)
 
 
