@@ -26,6 +26,7 @@ class Config:
     cache_max_gb: int
     log_level: str
     guild_ids: tuple[int, ...]
+    youtube_cookies_path: Path | None
 
 
 def _require(name: str) -> str:
@@ -75,6 +76,13 @@ def _parse_log_level(raw: str | None) -> str:
     return candidate
 
 
+def _parse_optional_path(name: str) -> Path | None:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    return Path(raw)
+
+
 def load() -> Config:
     return Config(
         discord_bot_token=_require("DISCORD_BOT_TOKEN"),
@@ -85,4 +93,5 @@ def load() -> Config:
         cache_max_gb=_parse_positive_int("RYZIC_CACHE_MAX_GB", 5),
         log_level=_parse_log_level(os.environ.get("RYZIC_LOG_LEVEL")),
         guild_ids=_parse_guild_ids(os.environ.get("RYZIC_GUILD_IDS")),
+        youtube_cookies_path=_parse_optional_path("RYZIC_YOUTUBE_COOKIES_PATH"),
     )

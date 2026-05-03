@@ -8,7 +8,7 @@ import dotenv
 import hikari
 import lightbulb
 
-from . import audio_cache, config, lavalink_glue
+from . import audio_cache, config, lavalink_glue, ytdlp
 
 _log = logging.getLogger(__name__)
 
@@ -57,6 +57,17 @@ def main() -> None:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
     _log.info("ryzic starting; log level=%s", cfg.log_level)
+
+    # Opt-in YouTube cookies (RYZIC_YOUTUBE_COOKIES_PATH). Loud at
+    # WARNING when active so an operator who set it intentionally still
+    # sees it on every restart. Default (unset) is silent.
+    if cfg.youtube_cookies_path is not None:
+        _log.warning(
+            "YouTube cookies enabled from %s — every /play-er can fetch any "
+            "video this account can see. See README.",
+            cfg.youtube_cookies_path,
+        )
+    ytdlp.set_cookies_path(cfg.youtube_cookies_path)
 
     bot = hikari.GatewayBot(
         token=cfg.discord_bot_token,

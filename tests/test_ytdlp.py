@@ -427,8 +427,11 @@ async def test_download_rejects_unsupported_url(tmp_path: Path) -> None:
 
 def test_base_opts_security_critical_settings() -> None:
     opts = ytdlp._base_opts()
-    # Cookies (both flavours) MUST stay disabled — security item 13.
-    assert opts["cookiefile"] is None
+    # Default = no cookies. ``cookiefile`` is opt-in (set_cookies_path);
+    # absent key means yt-dlp uses its built-in default (no cookies),
+    # which matches the README's pre-opt-in posture.
+    assert "cookiefile" not in opts
+    # Browser-extracted cookies stay unconditionally disabled.
     assert opts["cookiesfrombrowser"] is None
     # Plugin auto-loader disabled — security review #3.
     assert opts["plugin_dirs"] == []
@@ -448,3 +451,45 @@ def test_base_opts_security_critical_settings() -> None:
     # Defaults that get overridden for playlists.
     assert opts["noplaylist"] is True
     assert opts["extract_flat"] is False
+
+
+# ---------------------------------------------------------------------------
+# Opt-in YouTube cookies (RYZIC_YOUTUBE_COOKIES_PATH)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _restore_cookies_path() -> Any:
+    """Restore the module-level cookies path between tests.
+
+    The setter writes to a process-global. Without this restoration a
+    test that calls :func:`set_cookies_path` could bleed into
+    unrelated tests (especially under ``pytest-randomly``).
+    """
+    original = ytdlp._COOKIES_PATH
+    yield
+    ytdlp.set_cookies_path(original)
+
+
+def test_base_opts_no_cookiefile_when_unset() -> None:
+    ytdlp.set_cookies_path(None)
+    opts = ytdlp._base_opts()
+    assert "cookiefile" not in opts
+
+
+def test_base_opts_passes_cookiefile_when_set(tmp_path: Path) -> None:
+    cookies = tmp_path / "youtube-cookies.txt"
+    # File contents are not validated here — yt-dlp owns the parser.
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    ytdlp.set_cookies_path(cookies)
+    opts = ytdlp._base_opts()
+    assert opts["cookiefile"] == str(cookies)
+    # Browser-extracted cookies stay unconditionally disabled even
+    # when the file-based opt-in is on.
+    assert opts["cookiesfrombrowser"] is None
+
+
+def test_set_cookies_path_can_be_cleared(tmp_path: Path) -> None:
+    ytdlp.set_cookies_path(tmp_path / "x.txt")
+    ytdlp.set_cookies_path(None)
+    assert "cookiefile" not in ytdlp._base_opts()

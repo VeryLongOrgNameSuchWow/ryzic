@@ -22,7 +22,7 @@ When ryzic reaches v1.0, the following surfaces become covered by SemVer guarant
 
 - **Slash command names.** `/play`, `/skip`, `/queue`, `/pause`, `/resume`, `/leave` and any commands added later won't be renamed without a major bump.
 - **Slash command parameter shapes.** Names, types, optionality, and ordering of parameters are stable.
-- **Environment variable names and meanings.** Renaming `RYZIC_CACHE_DIR` or changing the units of `RYZIC_CACHE_MAX_GB` is breaking. Adding new optional env vars with sensible defaults is not.
+- **Environment variable names and meanings.** The configuration contract is `DISCORD_BOT_TOKEN`, `LAVALINK_HOST`, `LAVALINK_PORT`, `LAVALINK_PASSWORD`, `RYZIC_CACHE_DIR`, `RYZIC_CACHE_MAX_GB`, `RYZIC_LOG_LEVEL`, `RYZIC_GUILD_IDS`, and `RYZIC_YOUTUBE_COOKIES_PATH`. Renaming any of them, or changing the units of `RYZIC_CACHE_MAX_GB`, is breaking. Adding new optional env vars with sensible defaults is not.
 - **Default behaviors observable from a Discord client.** The auto-leave timeout, queue cap, and per-track duration cap are documented defaults; changing them in a way that surprises a self-hoster running a stable upgrade is breaking.
 - **`compose.yaml` rolling-upgrade compatibility.** A `docker compose pull && docker compose up -d` against an unchanged user-supplied `.env` should continue to work across patch and minor versions.
 - **On-disk cache format.** The SQLite schema and audio file layout under `RYZIC_CACHE_DIR` are stable; ryzic will migrate old caches in place rather than ignore them.
