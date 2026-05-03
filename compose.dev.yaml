@@ -1,0 +1,16 @@
+# Compose overlay for local development against a working tree.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build
+#
+# This overlay replaces the published GHCR `image:` from compose.yaml with a
+# `build:` from the local Dockerfile, so contributors can iterate without
+# pushing to GHCR. Operators just running the bot don't need this file.
+
+services:
+  ryzic:
+    build: .
+    # The image: from compose.yaml is still inherited; setting it to an
+    # explicit dev tag prevents the local build from cache-colliding with a
+    # previously-pulled GHCR image of the same name.
+    image: ryzic:dev
