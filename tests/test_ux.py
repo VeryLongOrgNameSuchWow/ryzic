@@ -115,7 +115,13 @@ def test_format_duration_clamps_negative() -> None:
 
 
 def test_track_embed_playing_now() -> None:
-    embed = ux.build_queued_track_embed(_track(), position=1, playing_now=True)
+    embed = ux.build_queued_track_embed(
+        _track(),
+        position=1,
+        playing_now=True,
+        channel_id=999,
+        requester_id=222,
+    )
     assert isinstance(embed, hikari.Embed)
     assert embed.title == "Queued"
     assert embed.description is not None
@@ -128,7 +134,13 @@ def test_track_embed_playing_now() -> None:
 
 
 def test_track_embed_position_in_queue() -> None:
-    embed = ux.build_queued_track_embed(_track(), position=4, playing_now=False)
+    embed = ux.build_queued_track_embed(
+        _track(),
+        position=4,
+        playing_now=False,
+        channel_id=999,
+        requester_id=222,
+    )
     assert embed.footer is not None
     text = embed.footer.text or ""
     assert "position 4 in queue" in text
@@ -139,6 +151,8 @@ def test_track_embed_escapes_markdown_in_title_and_uploader() -> None:
         _track(title="evil **bold** [link](url)", uploader="hax_or"),
         position=1,
         playing_now=False,
+        channel_id=999,
+        requester_id=222,
     )
     assert embed.description is not None
     # Both ``**`` and ``[`` get escaped — neither bold nor a markdown link
@@ -148,6 +162,23 @@ def test_track_embed_escapes_markdown_in_title_and_uploader() -> None:
     assert "\\*\\*bold\\*\\*" in embed.description
     assert embed.footer is not None
     assert "hax\\_or" in (embed.footer.text or "")
+
+
+def test_track_embed_includes_channel_and_requester_fields() -> None:
+    # Mention syntax (``<#…>`` / ``<@…>``) lives in inline embed fields
+    # rather than the footer because Discord renders mentions as pills
+    # in field values but as raw text in footers.
+    embed = ux.build_queued_track_embed(
+        _track(),
+        position=1,
+        playing_now=True,
+        channel_id=999,
+        requester_id=222,
+    )
+    assert embed.fields is not None
+    field_pairs = {f.name: (f.value, f.is_inline) for f in embed.fields}
+    assert field_pairs["Channel"] == ("<#999>", True)
+    assert field_pairs["Requested by"] == ("<@222>", True)
 
 
 # ---------------------------------------------------------------------------

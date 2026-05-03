@@ -105,12 +105,23 @@ def format_duration(ms: int) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
-def build_queued_track_embed(track: TrackInfo, position: int, *, playing_now: bool) -> hikari.Embed:
+def build_queued_track_embed(
+    track: TrackInfo,
+    position: int,
+    *,
+    playing_now: bool,
+    channel_id: int,
+    requester_id: int,
+) -> hikari.Embed:
     """Build the embed for a single-track ``/play`` success (M1 §3).
 
     ``position`` is 1-indexed within the queue. ``playing_now`` swaps
     the trailing ``"position N in queue"`` for ``"playing now"`` when
-    the queue was empty and the player was idle.
+    the queue was empty and the player was idle. ``channel_id`` is the
+    voice channel ryzic joined; ``requester_id`` is the invoking user.
+    Both render as Discord mentions in inline fields so users see a
+    clickable channel/user pill — footer text would render them as raw
+    ``<#…>`` / ``<@…>`` strings instead.
     """
     title = safe_truncate(escape_markdown(track.title), EMBED_DESCRIPTION_MAX // 2)
     uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
@@ -121,6 +132,8 @@ def build_queued_track_embed(track: TrackInfo, position: int, *, playing_now: bo
     else:
         footer = f"by {uploader} · {duration} · position {position} in queue"
     embed = hikari.Embed(title="Queued", description=description)
+    embed.add_field(name="Channel", value=f"<#{channel_id}>", inline=True)
+    embed.add_field(name="Requested by", value=f"<@{requester_id}>", inline=True)
     embed.set_footer(safe_truncate(footer, EMBED_FOOTER_MAX))
     return embed
 
