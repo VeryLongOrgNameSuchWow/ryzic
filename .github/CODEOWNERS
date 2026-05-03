@@ -1,0 +1,6 @@
+# Default owner for everything in the repo. GitHub will request a review
+# from this account on every PR; with branch protection set to require a
+# code-owner review, this account becomes a hard gate before merge.
+#
+# Single-maintainer project — keep this list small and accurate.
+* @VeryLongNicknameSuchWow
