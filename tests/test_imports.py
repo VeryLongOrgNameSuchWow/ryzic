@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ryzic import bot, config, errors
@@ -82,10 +84,17 @@ def test_config_rejects_unknown_log_level(monkeypatch: pytest.MonkeyPatch) -> No
         config.load()
 
 
-def test_config_repr_hides_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_repr_hides_secrets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "secret-bot-token-xyz")
     monkeypatch.setenv("LAVALINK_PASSWORD", "secret-lavalink-pwd-xyz")
+    # ``youtube_cookies_path`` is also ``field(repr=False)`` — it points
+    # at a file containing live YouTube session tokens, so any incidental
+    # ``repr(cfg)`` must stay clean of it (security review LOW-3).
+    cookies = tmp_path / "secret-cookies-marker-xyz.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setenv("RYZIC_YOUTUBE_COOKIES_PATH", str(cookies))
     cfg = config.load()
     rendered = repr(cfg)
     assert "secret-bot-token-xyz" not in rendered
     assert "secret-lavalink-pwd-xyz" not in rendered
+    assert "secret-cookies-marker-xyz" not in rendered

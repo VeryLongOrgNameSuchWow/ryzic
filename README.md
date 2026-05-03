@@ -144,7 +144,7 @@ A successful verification proves the image was built by this repo's release work
 
 `RYZIC_YOUTUBE_COOKIES_PATH`. When set, ryzic uses the cookies-file at this path on every yt-dlp call.
 
-**Read this before enabling**: anyone who can run a slash command on your bot can now fetch any video your YouTube account can see — including private uploads, age-restricted content, and YouTube Premium-only content. The cookies file effectively grants every `/play`-er a session as your account. Compromise of the bot host = compromise of your YouTube account. Do not enable on a server you don't fully control.
+**Read this before enabling**: anyone who can run a slash command on your bot can now fetch any video your YouTube account can see — including private uploads, age-restricted content, and YouTube Premium-only content. The cookies file effectively grants every `/play`-er a session as your account. Compromise of the bot host = compromise of your YouTube account. Do not enable on a server you don't fully control. If you suspect the bot host was ever compromised while cookies were active, sign out all sessions on the YouTube account (Google → Manage your Google Account → Security → Your devices) and re-export a fresh cookies file.
 
 Generate cookies via a browser extension (e.g. Get cookies.txt LOCALLY) and store them outside the bot's working directory. Mount as a read-only bind into the container — for example, add to your `compose.yaml` under `services.ryzic`:
 
@@ -154,6 +154,8 @@ Generate cookies via a browser extension (e.g. Get cookies.txt LOCALLY) and stor
     volumes:
       - /path/on/host/youtube-cookies.txt:/etc/ryzic/youtube-cookies.txt:ro
 ```
+
+ryzic copies the file into its private cache directory at startup so YouTube's session-refresh writes stay contained — your source file at the bind-mount path is never modified.
 
 Unset (the default) preserves the cookie-less behaviour described above.
 

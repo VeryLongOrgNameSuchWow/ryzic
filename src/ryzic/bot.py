@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 
 import dotenv
 import hikari
@@ -11,6 +12,11 @@ import lightbulb
 from . import audio_cache, config, lavalink_glue, ytdlp
 
 _log = logging.getLogger(__name__)
+
+# Filename of the writable scratch copy of the operator's cookies file
+# inside ``cfg.cache_dir``. Kept as a module constant so tests can refer
+# to the same name without hard-coding a literal in two places.
+_COOKIES_SCRATCH_FILENAME = "youtube-cookies.txt"
 
 
 def _build_client(bot: hikari.GatewayBot, cfg: config.Config) -> lightbulb.Client:
@@ -30,6 +36,54 @@ def _build_client(bot: hikari.GatewayBot, cfg: config.Config) -> lightbulb.Clien
             await ctx.respond("Pong")
 
     return client
+
+
+def _install_youtube_cookies(cfg: config.Config) -> None:
+    """Install the opt-in YouTube cookies file for yt-dlp, via a writable scratch copy.
+
+    yt-dlp's ``YoutubeDL.__exit__`` unconditionally calls
+    ``save_cookies()`` whenever ``cookiefile`` is set, which opens the
+    path in write mode. The README's recommended ``:ro`` bind mount
+    therefore raises ``PermissionError`` on every successful extraction,
+    breaking every ``/play`` once cookies are enabled.
+
+    To preserve the ``:ro`` source posture we copy the operator's file
+    into the bot's private cache directory at startup and hand yt-dlp
+    the scratch path. yt-dlp's session-refresh writes stay contained to
+    a volume the bot already owns; the operator's source file is never
+    modified. Refreshed session tokens are lost on restart, which is
+    fine — browser-exported cookies expire anyway and operators
+    periodically re-export.
+    """
+    if cfg.youtube_cookies_path is None:
+        ytdlp.set_cookies_path(None)
+        return
+
+    scratch_path = cfg.cache_dir / _COOKIES_SCRATCH_FILENAME
+    cfg.cache_dir.mkdir(parents=True, exist_ok=True)
+    # ``copyfile`` overwrites by default — the scratch copy is rebuilt
+    # fresh on every startup so a rotated source file takes effect on
+    # restart rather than reusing a stale copy from a prior run.
+    shutil.copyfile(cfg.youtube_cookies_path, scratch_path)
+    # Restrict to bot UID; the parent cache_dir is already private but
+    # mode the scratch file explicitly so it's never world/group readable
+    # regardless of the operator's umask.
+    scratch_path.chmod(0o600)
+
+    # WARNING references the operator's source path — that's the path
+    # they configured and recognize. The INFO follow-up notes the
+    # internal scratch copy for transparency.
+    _log.warning(
+        "YouTube cookies enabled from %s — every /play-er can fetch any "
+        "video this account can see. See README.",
+        cfg.youtube_cookies_path,
+    )
+    _log.info(
+        "YouTube cookies copied to writable scratch path %s "
+        "(yt-dlp session refreshes are contained to the bot's cache volume)",
+        scratch_path,
+    )
+    ytdlp.set_cookies_path(scratch_path)
 
 
 async def _bootstrap_audio_cache(cfg: config.Config) -> audio_cache.AudioCache:
@@ -58,16 +112,7 @@ def main() -> None:
     )
     _log.info("ryzic starting; log level=%s", cfg.log_level)
 
-    # Opt-in YouTube cookies (RYZIC_YOUTUBE_COOKIES_PATH). Loud at
-    # WARNING when active so an operator who set it intentionally still
-    # sees it on every restart. Default (unset) is silent.
-    if cfg.youtube_cookies_path is not None:
-        _log.warning(
-            "YouTube cookies enabled from %s — every /play-er can fetch any "
-            "video this account can see. See README.",
-            cfg.youtube_cookies_path,
-        )
-    ytdlp.set_cookies_path(cfg.youtube_cookies_path)
+    _install_youtube_cookies(cfg)
 
     bot = hikari.GatewayBot(
         token=cfg.discord_bot_token,

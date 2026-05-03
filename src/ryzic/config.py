@@ -26,7 +26,12 @@ class Config:
     cache_max_gb: int
     log_level: str
     guild_ids: tuple[int, ...]
-    youtube_cookies_path: Path | None
+    # ``repr=False`` matches ``discord_bot_token`` / ``lavalink_password``:
+    # the path itself is operator-controlled and not a credential, but it
+    # points at a file containing live YouTube session tokens, so any
+    # incidental ``repr(cfg)`` (debug log, config-dump command, error
+    # context) is kept from leaking it.
+    youtube_cookies_path: Path | None = field(repr=False, default=None)
 
 
 def _require(name: str) -> str:
@@ -83,6 +88,33 @@ def _parse_optional_path(name: str) -> Path | None:
     return Path(raw)
 
 
+def _parse_existing_file(name: str) -> Path | None:
+    """Read an optional env var pointing at an existing readable file.
+
+    Returns ``None`` when the env var is unset or empty (the operator
+    didn't opt in). When set, the path is required to exist, be a
+    regular file, and be readable by the bot's UID — otherwise we fail
+    fast at startup with an actionable error rather than letting yt-dlp
+    silently no-op a typo'd cookies path (security review §2 / threat
+    model question #6).
+    """
+    path = _parse_optional_path(name)
+    if path is None:
+        return None
+    raw = os.environ.get(name)
+    if not path.is_file():
+        raise ConfigError(
+            f"{name} points at a path that does not exist or is not a regular file: {raw!r}. "
+            f"Check the path is correct and that the bot user can read it."
+        )
+    if not os.access(path, os.R_OK):
+        raise ConfigError(
+            f"{name} points at a path the bot user cannot read: {raw!r}. "
+            f"Check the file's permissions (chmod 0o600 owned by the bot UID is typical)."
+        )
+    return path
+
+
 def load() -> Config:
     return Config(
         discord_bot_token=_require("DISCORD_BOT_TOKEN"),
@@ -93,5 +125,5 @@ def load() -> Config:
         cache_max_gb=_parse_positive_int("RYZIC_CACHE_MAX_GB", 5),
         log_level=_parse_log_level(os.environ.get("RYZIC_LOG_LEVEL")),
         guild_ids=_parse_guild_ids(os.environ.get("RYZIC_GUILD_IDS")),
-        youtube_cookies_path=_parse_optional_path("RYZIC_YOUTUBE_COOKIES_PATH"),
+        youtube_cookies_path=_parse_existing_file("RYZIC_YOUTUBE_COOKIES_PATH"),
     )
