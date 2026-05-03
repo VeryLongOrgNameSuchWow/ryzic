@@ -19,7 +19,7 @@ Squash your branch into a single Conventional Commit at merge time, or keep indi
 2. Branch off `main`. Push to a feature branch (we don't accept pushes directly to `main`).
 3. Make sure CI is green: `uv run ruff check && uv run ruff format --check && uv run ty check && uv run pytest -q`.
 4. Open a PR. Keep the PR focused — one logical change per PR is much easier to review than a kitchen sink.
-5. PRs need at least one approving review before merge. Don't self-merge.
+5. External PRs get a maintainer review before merge. Maintainer self-merges are OK once CI is green and the review gates below come back clean — there is currently a single maintainer, so an outside approval isn't always available, but the gates are non-negotiable.
 
 Before-merge gates (run as separate review passes on substantial PRs):
 

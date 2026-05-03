@@ -8,6 +8,10 @@
 
 A self-hostable Discord music bot. Plays YouTube audio in voice channels via [Lavalink](https://lavalink.dev/), with a local LRU cache so frequently-played tracks survive yt-dlp breakage. One bot per server you run yourself; no public hosting, no telemetry, no premium tier.
 
+> **Roadmap:** see [open milestones](https://github.com/VeryLongOrgNameSuchWow/ryzic/milestones) and the [`epic` label](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues?q=is%3Aissue+is%3Aopen+label%3Aepic) for what's planned next.
+>
+> **Support:** maintainer is best-effort and typically responds to issues and PRs within ~a week. Bugs and feature requests go in [Issues](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues); see [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
+
 ## Features
 
 - Six slash commands: `/play`, `/skip`, `/queue`, `/pause`, `/resume`, `/leave`.
@@ -103,6 +107,15 @@ All configuration is via environment variables (read from `.env` by `docker comp
 | `RYZIC_CACHE_MAX_GB` | no | `5` | LRU eviction kicks in once cached audio exceeds this size (GiB). |
 | `RYZIC_LOG_LEVEL` | no | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
 | `RYZIC_GUILD_IDS` | no | unset | Comma-separated guild IDs for instant slash-command registration. Unset = global registration (up to 1h propagation). |
+
+## Upgrading
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The image is pinned to `:latest` by default; pin to a specific `:vX.Y.Z` in your `compose.yaml` if you want manual control over upgrades. The audio + playlist cache (the `RYZIC_CACHE_DIR` bind mount) and the SQLite database inside it persist across upgrades — `docker compose pull` only replaces the image, not the volume.
 
 ## Self-hoster considerations
 
