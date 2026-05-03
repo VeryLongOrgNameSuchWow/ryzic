@@ -1,6 +1,6 @@
 [project]
 name = "ryzic"
-version = "0.0.0"
+version = "0.1.0"
 description = "Self-hostable Discord music bot"
 readme = "README.md"
 license = "MIT"
