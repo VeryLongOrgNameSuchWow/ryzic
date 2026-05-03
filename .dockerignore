@@ -34,6 +34,7 @@ docs
 
 # Compose stack and lavalink config aren't part of the bot image
 compose.yaml
+compose.dev.yaml
 docker-compose.yaml
 docker-compose.yml
 lavalink
