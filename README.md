@@ -36,12 +36,17 @@ A self-hostable Discord music bot. Plays YouTube audio in voice channels via [La
    - **Do not pick Administrator.** A music bot has no business with admin rights — it's a security smell and many server owners refuse such invites.
 5. Open the generated URL and invite the bot to your server.
 
-### 2. Clone and configure
+### 2. Fetch the deploy files
+
+You only need three files on disk — the published [`ghcr.io/verylongorgnamesuchwow/ryzic`](https://github.com/VeryLongOrgNameSuchWow/ryzic/pkgs/container/ryzic) image carries the bot itself, so there's no source tree to maintain.
 
 ```bash
-git clone https://github.com/VeryLongOrgNameSuchWow/ryzic.git
-cd ryzic
-cp .env.example .env
+mkdir ryzic && cd ryzic
+curl -fsSLO https://raw.githubusercontent.com/VeryLongOrgNameSuchWow/ryzic/main/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/VeryLongOrgNameSuchWow/ryzic/main/.env.example
+mkdir lavalink && curl -fsSL -o lavalink/application.yml \
+  https://raw.githubusercontent.com/VeryLongOrgNameSuchWow/ryzic/main/lavalink/application.yml
+mv .env.example .env
 ```
 
 Edit `.env` and paste the token into `DISCORD_BOT_TOKEN=`.
@@ -58,11 +63,13 @@ RYZIC_GUILD_IDS=123456789012345678
 docker compose up -d
 ```
 
-The first boot pulls the Lavalink image and downloads the `youtube-source` plugin (~30s). Tail the logs to confirm both services are healthy:
+The first boot pulls the ryzic + Lavalink images and downloads the `youtube-source` plugin (~30s). Tail the logs to confirm both services are healthy:
 
 ```bash
 docker compose logs -f
 ```
+
+`compose.yaml` pins the bot to the `:0.1` minor tag — `docker compose pull && docker compose up -d` picks up patch releases on the 0.1.x line. Bumping to a future `:0.2` is a manual edit, since pre-1.0 minor bumps may include breaking changes (see [SEMVER.md](SEMVER.md)).
 
 ### 4. Try it
 
@@ -109,10 +116,20 @@ All configuration is via environment variables (read from `.env` by `docker comp
 You don't need Docker to hack on the code — only to run a real Lavalink (which the integration tests spin up themselves via testcontainers).
 
 ```bash
+git clone https://github.com/VeryLongOrgNameSuchWow/ryzic.git
+cd ryzic
 uv sync
 uv run pytest -q
 uv run python -m ryzic    # requires DISCORD_BOT_TOKEN + a reachable Lavalink
 ```
+
+To run the local working tree under compose instead of the published GHCR image, layer the dev overlay on top of `compose.yaml`:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up --build
+```
+
+The overlay swaps `image: ghcr.io/...` for `build: .` so iteration doesn't require pushing to GHCR.
 
 Run the same lint/type/test suite CI runs before opening a PR — see [CONTRIBUTING.md § Pull requests](CONTRIBUTING.md#pull-requests) for the canonical command. [docs/manual-smoke-tests.md](docs/manual-smoke-tests.md) is the end-to-end checklist run before each release.
 

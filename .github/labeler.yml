@@ -37,6 +37,7 @@
           - "Dockerfile"
           - ".dockerignore"
           - "compose.yaml"
+          - "compose.dev.yaml"
           - "lavalink/**"
           - "tests/integration/**"
 
