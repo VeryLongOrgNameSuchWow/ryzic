@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.2.2...v0.3.0) (2026-05-04)
+
+
+### Features
+
+* **config:** add RYZIC_AUTOLEAVE_SECONDS for configurable queue-end auto-leave ([#77](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/77)) ([67449d1](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/67449d109036654a4c43fbe013f5372d8c8b4b31))
+* **ux:** show channel + requester on single-track /play embed ([#75](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/75)) ([a0272c8](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/a0272c841914265a0a0747fd4fbbf60b9bdc4f5e))
+
 ## [0.2.2](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.2.1...v0.2.2) (2026-05-03)
 
 
