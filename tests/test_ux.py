@@ -121,6 +121,8 @@ def test_format_duration_clamps_negative() -> None:
         ("1:30", (False, 90_000)),
         ("12:34", (False, 754_000)),
         ("0:09", (False, 9_000)),
+        # Single-digit seconds — Discord-mobile-friendly UX.
+        ("1:5", (False, 65_000)),
         ("1:02:05", (False, 3_725_000)),
         ("0:00:30", (False, 30_000)),
         ("30", (False, 30_000)),
@@ -144,6 +146,9 @@ def test_parse_seek_position_accepts_valid(raw: str, expected: tuple[bool, int])
         "abc",
         "1:60",  # seconds field >= 60
         "1:99",  # seconds field >= 60
+        # Symmetric: minutes >= 60 also rejected in H:MM:SS form.
+        "0:60:30",
+        "1:99:00",
         ":30",  # missing leading minutes
         "1:",  # missing seconds
         "+",  # sign without digits

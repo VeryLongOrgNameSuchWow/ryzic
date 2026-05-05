@@ -106,9 +106,12 @@ def format_duration(ms: int) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
-# ``H:MM:SS`` (3 groups) or ``M:SS`` (last 2 groups) absolute form.
-# Per-component bounds are enforced in :func:`parse_seek_position`.
-_SEEK_ABSOLUTE_RE: Final = re.compile(r"^(?:(\d+):)?(\d+):(\d{1,2})$|^(\d+):(\d{2})$")
+# Absolute form: optional ``H:`` prefix + ``M:S`` or ``M:SS``. Per-component
+# numeric bounds (``MM < 60``, ``SS < 60``) live in :func:`parse_seek_position`
+# so the regex stays focused on shape. Single-digit seconds are intentional
+# — Discord mobile makes zero-padding tedious; ``1:5`` is a reasonable thing
+# to type and we read it as 1m5s.
+_SEEK_ABSOLUTE_RE: Final = re.compile(r"^(?:(\d+):)?(\d+):(\d{1,2})$")
 # ``+30`` / ``-15`` relative form, seconds only. The leading sign is
 # REQUIRED — a bare integer like ``30`` is treated as ``0:30`` absolute.
 _SEEK_RELATIVE_RE: Final = re.compile(r"^([+-])(\d+)$")
@@ -119,7 +122,8 @@ def parse_seek_position(raw: str) -> tuple[bool, int] | None:
 
     Accepts:
 
-    * Absolute ``M:SS`` or ``H:MM:SS`` (one or two colons).
+    * Absolute ``M:S`` / ``M:SS`` / ``H:MM:SS`` (one or two colons; single-
+      or double-digit seconds; minutes and seconds must each be ``< 60``).
     * Relative ``+N`` / ``-N`` (seconds, sign required).
     * Bare integer ``N`` — treated as absolute seconds (i.e. ``0:N``).
 
@@ -140,17 +144,13 @@ def parse_seek_position(raw: str) -> tuple[bool, int] | None:
         return True, (-seconds if sign == "-" else seconds) * 1000
     abs_match = _SEEK_ABSOLUTE_RE.match(raw)
     if abs_match is not None:
-        # Two regex branches: ``H:MM:SS`` (groups 1-3) or ``M:SS`` (groups 4-5).
-        groups = abs_match.groups()
-        if groups[0] is not None or groups[1] is not None:
-            hours = int(groups[0] or 0)
-            minutes = int(groups[1])
-            seconds = int(groups[2])
-        else:
-            hours = 0
-            minutes = int(groups[3])
-            seconds = int(groups[4])
-        if seconds >= 60:
+        hours_str, minutes_str, seconds_str = abs_match.groups()
+        hours = int(hours_str or 0)
+        minutes = int(minutes_str)
+        seconds = int(seconds_str)
+        # Reject overflowed minute/second components — symmetric guards so
+        # ``0:60:30`` is rejected just like ``1:60``.
+        if seconds >= 60 or minutes >= 60:
             return None
         return False, ((hours * 3600) + (minutes * 60) + seconds) * 1000
     if raw.isdigit():
