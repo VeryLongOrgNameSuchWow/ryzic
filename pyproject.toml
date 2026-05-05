@@ -14,6 +14,7 @@ dependencies = [
     "hikari>=2.4.1",
     "hikari-lightbulb>=3.2,<4",
     "lavalink>=5,<6",
+    "pydantic-settings>=2.14.0",
     "python-dotenv>=1.1.1",
     "yt-dlp>=2026.3.17",
 ]
