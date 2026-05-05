@@ -38,6 +38,10 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}  # input tag on dispatch, pushed tag on push
 
+      # Registers binfmt_misc handlers so the runner can execute arm64
+      # binaries during the linux/arm64 leg of the multi-platform build.
+      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a  # v4.0.0
+
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
 
       - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
@@ -66,6 +70,12 @@ jobs:
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
         with:
           context: .
+          # Multi-arch via QEMU emulation on the single ubuntu-latest runner.
+          # `outputs.digest` resolves to the manifest list digest, so the SLSA
+          # attestation below covers the whole multi-arch artifact in one shot.
+          # If arm64 emulation ever pushes wall-time past ~15min, switch the
+          # arm64 leg to a GitHub-hosted arm64 runner (free for public FOSS).
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
