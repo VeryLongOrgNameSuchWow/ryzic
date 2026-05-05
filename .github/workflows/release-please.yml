@@ -35,7 +35,68 @@ jobs:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        id: release-please
         with:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # Auto-pin compose.yaml's image tag to the new major.minor whenever the
+      # release-please PR's manifest version changes the major or minor part.
+      # This keeps `docker compose pull` semantics aligned with the latest
+      # release line (operators don't have to remember to manually edit the
+      # tag on each minor bump). release-please itself doesn't expose a
+      # major.minor extra-files updater (only `version` / `major` / `minor`
+      # individually, and the image tag has both on one line), so we patch
+      # the file on the release-PR branch directly and let the maintainer
+      # see the diff before merging the release PR.
+      - name: Pin compose.yaml image tag to release major.minor
+        if: ${{ steps.release-please.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PRS_JSON: ${{ steps.release-please.outputs.prs }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          branch=$(jq -r '.[0].headBranchName // empty' <<<"$PRS_JSON")
+          if [ -z "$branch" ]; then
+            echo "release-please opened no PR; nothing to pin"
+            exit 0
+          fi
+          # release-please-action runs against the API, so we have no working
+          # tree at this point — clone the release-PR branch into a scratch
+          # dir to read its manifest and apply the pin. Auth lives in an
+          # http.extraheader override (kept off-disk) rather than embedded in
+          # the remote URL, so .git/config never persists the token.
+          workdir=$(mktemp -d)
+          remote="${SERVER}/${REPO}.git"
+          auth_header="AUTHORIZATION: bearer ${GH_TOKEN}"
+          git -c "http.${remote}.extraheader=${auth_header}" \
+            clone --depth=1 --branch "$branch" "$remote" "$workdir"
+          cd "$workdir"
+          version=$(jq -r '."."' .release-please-manifest.json)
+          # Strict semver-shape check; bail loudly on anything else so a
+          # surprise manifest format doesn't silently produce a bad pin.
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::unexpected manifest version $version"
+            exit 1
+          fi
+          target="${version%.*}"
+          # Match :MAJOR.MINOR (no patch) right after the ryzic image name,
+          # delimited by EOL or whitespace. Avoid sed's `t` chain — single
+          # canonical pin keeps this deterministic.
+          if ! grep -qE '^\s*image:\s*ghcr\.io/verylongorgnamesuchwow/ryzic:[0-9]+\.[0-9]+\s*$' compose.yaml; then
+            echo "::error::compose.yaml image pin not in expected MAJOR.MINOR shape"
+            exit 1
+          fi
+          sed -i -E "s|(image:\s*ghcr\.io/verylongorgnamesuchwow/ryzic:)[0-9]+\.[0-9]+|\1${target}|" compose.yaml
+          if git diff --quiet -- compose.yaml; then
+            echo "compose.yaml already pinned to :${target}; nothing to do"
+            exit 0
+          fi
+          git config user.name 'vlonsw-release-please[bot]'
+          git config user.email '281041686+vlonsw-release-please[bot]@users.noreply.github.com'
+          git add compose.yaml
+          git commit -m "chore(release): pin compose.yaml image to :${target}"
+          git -c "http.${remote}.extraheader=${auth_header}" push origin "$branch"
