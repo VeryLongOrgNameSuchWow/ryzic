@@ -426,7 +426,7 @@ async def test_out_of_range_pluralizes_correctly_for_multiple_pages() -> None:
 
 
 async def test_empty_queue_with_default_page_renders_now_playing_only() -> None:
-    """Empty queue + page=1 (default) → embed shows now-playing, no description, no out-of-range."""
+    """Empty queue + page=1 (default) → embed description is the ``Now: …`` hint only."""
     bot = FakeBot()
     ctx = context_for(bot)
     await _setup_player_with_queue(0)
@@ -435,8 +435,11 @@ async def test_empty_queue_with_default_page_renders_now_playing_only() -> None:
 
     fake = cast(Any, ctx)
     embed: hikari.Embed = fake.responses[0][1]["embed"]
-    # Empty-queue empty-description — caller's Now-playing field stands alone.
-    assert embed.description in (None, "")
+    body = embed.description or ""
+    # Empty queue → description is exactly the ``Now: …`` hint with no
+    # blank-line separator or queue-list body.
+    assert body.startswith("Now: ")
+    assert "\n\n" not in body
     # Page-suffix omitted because total_pages=1 for an empty queue.
     assert "page" not in (embed.title or "")
 

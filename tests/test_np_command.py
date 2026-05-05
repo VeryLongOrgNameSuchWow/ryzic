@@ -10,6 +10,7 @@ import pytest
 from ryzic import lavalink_glue
 from ryzic.commands import np as np_module
 from tests._command_helpers import (
+    FakeAudioTrack,
     FakeBot,
     FakeLavalinkClient,
     context_for,
@@ -79,8 +80,6 @@ async def test_current_without_metadata_returns_nothing_playing() -> None:
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
     # Track without attached TrackInfo extras → treated as not-playable for /np.
-    from tests._command_helpers import FakeAudioTrack
-
     player.current = cast(Any, FakeAudioTrack())
 
     await np_module._handle_np(ctx)
