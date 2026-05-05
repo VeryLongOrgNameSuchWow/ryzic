@@ -53,9 +53,11 @@ _MARKDOWN_CHARS: Final = ("\\", "[", "]", "(", ")", "*", "_", "~", "`", "|", ">"
 # 4096-char ceiling.
 _ELLIPSIS: Final = "…"
 
-# Number of queued entries to enumerate inline in ``/queue``; the rest
-# collapse to a single "… and N more" line per M1 §3.
-_QUEUE_PREVIEW_MAX: Final = 10
+# Number of queued entries per page in ``/queue`` (issue #99). Public
+# because the ``/queue`` command reads it to compute ``total_pages``;
+# keeping the page-size definition in one place avoids drift between
+# the slicing boundary and the user-facing pagination math.
+QUEUE_PAGE_SIZE: Final = 10
 
 # Number of history entries enumerated inline in ``/recent``. The ring's
 # hard cap (``track_history.MAX_HISTORY_SIZE``) is the upper bound; the
@@ -286,18 +288,25 @@ def build_queue_embed(
     now_playing_position_ms: int,
     paused: bool,
     queue: list[tuple[TrackInfo, int]],
+    page: int = 1,
+    total_pages: int = 1,
 ) -> hikari.Embed:
-    """Build the ``/queue`` embed (M1 §3).
+    """Build the ``/queue`` embed (M1 §3, paging per issue #99).
 
-    ``queue`` is a list of ``(track_info, requester_id)`` tuples in
-    queue order — the entry at index 0 plays next. The embed enumerates
-    the first :data:`_QUEUE_PREVIEW_MAX` entries inline; anything beyond
-    collapses to ``"… and N more"`` so we never blow the 4096-char
-    description budget on long playlists.
+    ``queue`` is the FULL list of ``(track_info, requester_id)`` tuples
+    in queue order; this builder slices internally to render
+    :data:`QUEUE_PAGE_SIZE` entries for the requested ``page``. The
+    indexing in the description is global (page 2 starts at "11.", not
+    "1."), so users can see where each visible track lives in the queue.
+    Title gains a "(page X/Y)" suffix only when ``total_pages > 1`` —
+    short queues that fit on a single page render unchanged.
     """
     queue_count = len(queue)
     queue_total_ms = sum(info.duration_ms for info, _ in queue)
-    title = f"Queue ({queue_count} tracks · {format_duration(queue_total_ms)})"
+    plural = "" if queue_count == 1 else "s"
+    title = f"Queue ({queue_count} track{plural} · {format_duration(queue_total_ms)})"
+    if total_pages > 1:
+        title = f"{title} — page {page}/{total_pages}"
 
     np_title = safe_truncate(escape_markdown(now_playing.title), EMBED_FIELD_VALUE_MAX // 2)
     progress = (
@@ -310,32 +319,34 @@ def build_queue_embed(
         EMBED_FIELD_VALUE_MAX,
     )
 
-    description = _build_queue_description(queue)
+    description = _build_queue_description(queue, page=page)
 
     embed = hikari.Embed(title=title, description=description)
     embed.add_field(name="Now playing", value=now_playing_value, inline=False)
     return embed
 
 
-def _build_queue_description(queue: list[tuple[TrackInfo, int]]) -> str:
-    """Format the description body of the ``/queue`` embed.
+def _build_queue_description(queue: list[tuple[TrackInfo, int]], *, page: int) -> str:
+    """Format the description body of the ``/queue`` embed for ``page``.
 
     Returns the empty string when ``queue`` is empty so the caller's
     embed has no description (the Now playing field stands alone).
+    Indices are global (1-indexed against the full queue), so page 2
+    of a 25-track queue starts at "11." — gives users a stable mental
+    model of where each visible track sits in the playback order.
     """
     if not queue:
         return ""
-    preview = queue[:_QUEUE_PREVIEW_MAX]
+    start = (page - 1) * QUEUE_PAGE_SIZE
+    end = start + QUEUE_PAGE_SIZE
+    page_slice = queue[start:end]
     lines = [
         (
             f"{idx}. [{escape_markdown(info.title)}]({info.url}) — "
             f"{format_duration(info.duration_ms)} (req. by <@{requester_id}>)"
         )
-        for idx, (info, requester_id) in enumerate(preview, start=1)
+        for idx, (info, requester_id) in enumerate(page_slice, start=start + 1)
     ]
-    overflow = len(queue) - len(preview)
-    if overflow > 0:
-        lines.append(f"… and {overflow} more")
     return safe_truncate("\n".join(lines), EMBED_DESCRIPTION_MAX)
 
 

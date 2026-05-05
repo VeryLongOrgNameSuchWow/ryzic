@@ -120,7 +120,7 @@ async def test_command_responds_with_embed_when_playing() -> None:
     fake = cast(Any, ctx)
     embed = fake.responses[0][1]["embed"]
     assert isinstance(embed, hikari.Embed)
-    assert embed.title is not None and embed.title.startswith("Queue (1 tracks")
+    assert embed.title is not None and embed.title.startswith("Queue (1 track ")
 
 
 async def test_default_response_is_public() -> None:
@@ -200,6 +200,17 @@ def test_embed_title_counts_only_queued_tracks() -> None:
     assert embed.title == "Queue (2 tracks · 5:00)"
 
 
+def test_embed_title_pluralizes_correctly_for_singular_track() -> None:
+    """One-track queue renders ``Queue (1 track · ...)`` (no rogue plural)."""
+    embed = ux.build_queue_embed(
+        now_playing=make_track_info(title="Now"),
+        now_playing_position_ms=0,
+        paused=False,
+        queue=[(make_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=60_000), 222)],
+    )
+    assert embed.title == "Queue (1 track · 1:00)"
+
+
 def test_embed_now_playing_field_shows_progress_and_link() -> None:
     embed = ux.build_queue_embed(
         now_playing=make_track_info(title="Now", duration_ms=180_000),
@@ -250,8 +261,8 @@ def test_embed_description_lists_queued_entries_with_requester_mention() -> None
     assert "2. [B](https://www.youtube.com/watch?v=bbbbbbbbbbb) — 2:00 (req. by <@333>)" in body
 
 
-def test_embed_description_collapses_overflow_beyond_ten() -> None:
-    """Beyond the first 10 entries the description appends an "… and N more" line."""
+def test_embed_description_page_one_lists_first_ten_entries() -> None:
+    """Page 1 (default) renders entries 1..10 of the full queue."""
     queue = [
         (make_track_info(video_id=f"vid_{i:07d}", title=f"T{i}", duration_ms=60_000), 222)
         for i in range(15)
@@ -261,12 +272,57 @@ def test_embed_description_collapses_overflow_beyond_ten() -> None:
         now_playing_position_ms=0,
         paused=False,
         queue=queue,
+        page=1,
+        total_pages=2,
     )
     body = embed.description or ""
-    # 1..10 listed, 11..15 collapsed.
+    # 1..10 visible, 11..15 deferred to page 2.
     assert "10. [T9]" in body
     assert "11. [T10]" not in body
-    assert "… and 5 more" in body
+    # Issue #99 explicitly removed the "… and N more" overflow line —
+    # paging is the new affordance for "see beyond 10".
+    assert "and 5 more" not in body
+    # Title gains the page indicator only when total_pages > 1.
+    assert "page 1/2" in (embed.title or "")
+
+
+def test_embed_description_page_two_lists_continuation_with_global_indices() -> None:
+    """Page 2 starts at "11." — global indexing (issue #99)."""
+    queue = [
+        (make_track_info(video_id=f"vid_{i:07d}", title=f"T{i}", duration_ms=60_000), 222)
+        for i in range(15)
+    ]
+    embed = ux.build_queue_embed(
+        now_playing=make_track_info(title="Now"),
+        now_playing_position_ms=0,
+        paused=False,
+        queue=queue,
+        page=2,
+        total_pages=2,
+    )
+    body = embed.description or ""
+    assert "11. [T10]" in body
+    assert "15. [T14]" in body
+    # First-page entries do NOT appear on page 2.
+    assert "1. [T0]" not in body
+    assert "page 2/2" in (embed.title or "")
+
+
+def test_embed_title_omits_page_suffix_for_single_page_queues() -> None:
+    """Default ``total_pages=1`` (≤ 10 entries) renders the original title shape."""
+    queue = [
+        (make_track_info(video_id=f"vid_{i:07d}", title=f"T{i}", duration_ms=60_000), 222)
+        for i in range(3)
+    ]
+    embed = ux.build_queue_embed(
+        now_playing=make_track_info(title="Now"),
+        now_playing_position_ms=0,
+        paused=False,
+        queue=queue,
+    )
+    title = embed.title or ""
+    assert "page" not in title
+    assert "Queue (3 tracks" in title
 
 
 def test_embed_description_escapes_markdown_in_titles() -> None:
@@ -288,3 +344,126 @@ def test_embed_description_escapes_markdown_in_titles() -> None:
 
 def test_loader_registered_queue_command() -> None:
     assert queue_module.Queue._command_data.name == "queue"
+
+
+# ---------------------------------------------------------------------------
+# Paging command branches (issue #99)
+# ---------------------------------------------------------------------------
+
+
+async def _setup_player_with_queue(n: int) -> Any:
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.current = make_track_with_info(make_track_info(title="Now"))
+    player.queue = [
+        make_track_with_info(
+            make_track_info(video_id=f"vid_{i:07d}", title=f"T{i}", duration_ms=60_000)
+        )
+        for i in range(n)
+    ]
+    return player
+
+
+async def test_default_page_renders_first_ten_when_queue_overflows() -> None:
+    """No ``page`` arg → page 1 default → entries 1..10."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    await _setup_player_with_queue(15)
+
+    await queue_module._handle_queue(ctx)
+
+    fake = cast(Any, ctx)
+    embed: hikari.Embed = fake.responses[0][1]["embed"]
+    description = embed.description or ""
+    assert "1. [T0]" in description
+    assert "10. [T9]" in description
+    assert "11. [T10]" not in description
+    assert "page 1/2" in (embed.title or "")
+
+
+async def test_page_two_renders_continuation() -> None:
+    """``page=2`` → entries 11..15 (with global indices)."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    await _setup_player_with_queue(15)
+
+    await queue_module._handle_queue(ctx, page=2)
+
+    fake = cast(Any, ctx)
+    embed: hikari.Embed = fake.responses[0][1]["embed"]
+    description = embed.description or ""
+    assert "11. [T10]" in description
+    assert "15. [T14]" in description
+    assert "1. [T0]" not in description
+    assert "page 2/2" in (embed.title or "")
+
+
+async def test_out_of_range_page_returns_friendly_ephemeral() -> None:
+    bot = FakeBot()
+    ctx = context_for(bot)
+    await _setup_player_with_queue(5)  # only fits on page 1
+
+    await queue_module._handle_queue(ctx, page=2)
+
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == "Queue has only 1 page."
+    assert fake.responses[0][1].get("ephemeral") is True
+
+
+async def test_out_of_range_pluralizes_correctly_for_multiple_pages() -> None:
+    bot = FakeBot()
+    ctx = context_for(bot)
+    await _setup_player_with_queue(15)  # 2 pages
+
+    await queue_module._handle_queue(ctx, page=99)
+
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == "Queue has only 2 pages."
+    assert fake.responses[0][1].get("ephemeral") is True
+
+
+async def test_empty_queue_with_default_page_renders_now_playing_only() -> None:
+    """Empty queue + page=1 (default) → embed shows now-playing, no description, no out-of-range."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    await _setup_player_with_queue(0)
+
+    await queue_module._handle_queue(ctx)
+
+    fake = cast(Any, ctx)
+    embed: hikari.Embed = fake.responses[0][1]["embed"]
+    # Empty-queue empty-description — caller's Now-playing field stands alone.
+    assert embed.description in (None, "")
+    # Page-suffix omitted because total_pages=1 for an empty queue.
+    assert "page" not in (embed.title or "")
+
+
+async def test_empty_queue_with_explicit_page_two_returns_out_of_range() -> None:
+    """Even an empty queue rejects ``page=2`` rather than rendering blank — clear feedback."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    await _setup_player_with_queue(0)
+
+    await queue_module._handle_queue(ctx, page=2)
+
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == "Queue has only 1 page."
+
+
+async def test_exact_page_boundary_renders_full_last_page() -> None:
+    """20-track queue at QUEUE_PAGE_SIZE=10 → 2 pages, page 2 renders all 10 entries."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    await _setup_player_with_queue(20)
+
+    await queue_module._handle_queue(ctx, page=2)
+
+    fake = cast(Any, ctx)
+    embed: hikari.Embed = fake.responses[0][1]["embed"]
+    description = embed.description or ""
+    assert "11. [T10]" in description
+    assert "20. [T19]" in description
+    # No 21 — that's beyond the queue; renderer must not synthesise extra rows.
+    assert "21." not in description
+    assert "page 2/2" in (embed.title or "")
