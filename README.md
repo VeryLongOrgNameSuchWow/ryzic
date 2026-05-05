@@ -147,18 +147,61 @@ A successful verification proves the image was built by this repo's release work
 
 **Read this before enabling**: anyone who can run a slash command on your bot can now fetch any video your YouTube account can see — including private uploads, age-restricted content, and YouTube Premium-only content. The cookies file effectively grants every `/play`-er a session as your account. Compromise of the bot host = compromise of your YouTube account. Do not enable on a server you don't fully control. If you suspect the bot host was ever compromised while cookies were active, sign out all sessions on the YouTube account (Google → Manage your Google Account → Security → Your devices) and re-export a fresh cookies file.
 
-Generate cookies via a browser extension (e.g. Get cookies.txt LOCALLY) and store them outside the bot's working directory. Mount as a read-only bind into the container — for example, add to your `compose.yaml` under `services.ryzic`:
+If — and only if — you've read the warning above and accept the tradeoff, the recipe below wires a host cookies file into the container.
 
-```yaml
-    environment:
-      RYZIC_YOUTUBE_COOKIES_PATH: /etc/ryzic/youtube-cookies.txt
-    volumes:
-      - /path/on/host/youtube-cookies.txt:/etc/ryzic/youtube-cookies.txt:ro
+#### 1. Extract cookies
+
+Pick whichever path matches your environment. Use a YouTube account you'd be willing to lose; do not use your primary Google account.
+
+- **Browser (recommended for desktop self-hosters).** Install the [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) Chrome extension (open-source, runs locally — no server round-trip). Sign in to YouTube, click the extension, **Export As → youtube.com**, save as `youtube-cookies.txt` next to `compose.yaml`.
+- **Headless host (no GUI).** With Chromium installed and signed in to YouTube, export from its cookie store via yt-dlp:
+
+  ```bash
+  uvx --with secretstorage yt-dlp \
+    --cookies-from-browser chromium \
+    --cookies youtube-cookies.txt \
+    -o '%(id)s.skip' \
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+  ```
+
+  The probe URL is a deliberately well-known public video; the `-o '%(id)s.skip'` template plus the implicit metadata fetch causes yt-dlp to write the cookies file without downloading any media. Re-run when the cookies expire.
+
+#### 2. Set permissions (the easy-to-miss gotcha)
+
+```bash
+chmod 0644 youtube-cookies.txt
 ```
 
-ryzic copies the file into its private cache directory at startup so YouTube's session-refresh writes stay contained — your source file at the bind-mount path is never modified.
+The container runs as UID 1001; your host file is owned by your UID (typically 1000). With mode `0600` the container can't read the bind mount and `/play` fails with `cannot read cookies` — the bot won't even reach yt-dlp. `0644` (other-readable) is what you want here. The file is bind-mounted `:ro`, so widening host-side read does not loosen container-side guarantees. Do not relax further (no `0666`); world-readable on the host serves no purpose for this recipe.
 
-Unset (the default) preserves the cookie-less behaviour described above.
+#### 3. Mount via compose override
+
+Copy [`compose.override.yaml.example`](compose.override.yaml.example) to `compose.override.yaml` next to your `compose.yaml`:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/VeryLongOrgNameSuchWow/ryzic/main/compose.override.yaml.example
+mv compose.override.yaml.example compose.override.yaml
+```
+
+It mounts `./youtube-cookies.txt` read-only at `/etc/ryzic/youtube-cookies.txt` inside the container.
+
+#### 4. Set the env var and bring it up
+
+In `.env`:
+
+```bash
+RYZIC_YOUTUBE_COOKIES_PATH=/etc/ryzic/youtube-cookies.txt
+```
+
+Then, with both compose files:
+
+```bash
+docker compose -f compose.yaml -f compose.override.yaml up -d
+```
+
+ryzic copies the cookies file into its private cache directory at startup so YouTube's session-refresh writes stay contained — your source file at the bind-mount path is never modified. Re-run extraction (step 1) and `docker compose restart ryzic` when the cookies expire.
+
+Unset `RYZIC_YOUTUBE_COOKIES_PATH` (the default) preserves the cookie-less behaviour described above.
 
 ## Development
 

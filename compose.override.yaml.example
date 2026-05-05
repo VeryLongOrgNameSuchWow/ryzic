@@ -1,0 +1,10 @@
+# Mount your host-extracted YouTube cookies into the ryzic container.
+# Run with both -f files:
+#   docker compose -f compose.yaml -f compose.override.yaml up -d
+#
+# Read README's "Opt-in: YouTube cookies" section first — enabling cookies
+# lets every /play-er fetch any video your YouTube account can see.
+services:
+  ryzic:
+    volumes:
+      - ./youtube-cookies.txt:/etc/ryzic/youtube-cookies.txt:ro

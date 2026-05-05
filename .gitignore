@@ -53,3 +53,9 @@ id_ecdsa*
 secrets/
 secrets.json
 credentials.json
+
+# YouTube cookies — README's "Opt-in: YouTube cookies" recipe places
+# youtube-cookies.txt at the repo root. Never commit a real cookies file.
+cookies.txt
+youtube-cookies.txt
+*.cookies.txt
