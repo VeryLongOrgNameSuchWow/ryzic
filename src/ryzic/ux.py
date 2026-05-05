@@ -29,6 +29,7 @@ which is unhelpful for embeds.
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 import hikari
@@ -103,6 +104,58 @@ def format_duration(ms: int) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes}:{seconds:02d}"
+
+
+# Absolute form: optional ``H:`` prefix + ``M:S`` or ``M:SS``. Per-component
+# numeric bounds (``MM < 60``, ``SS < 60``) live in :func:`parse_seek_position`
+# so the regex stays focused on shape. Single-digit seconds are intentional
+# — Discord mobile makes zero-padding tedious; ``1:5`` is a reasonable thing
+# to type and we read it as 1m5s.
+_SEEK_ABSOLUTE_RE: Final = re.compile(r"^(?:(\d+):)?(\d+):(\d{1,2})$")
+# ``+30`` / ``-15`` relative form, seconds only. The leading sign is
+# REQUIRED — a bare integer like ``30`` is treated as ``0:30`` absolute.
+_SEEK_RELATIVE_RE: Final = re.compile(r"^([+-])(\d+)$")
+
+
+def parse_seek_position(raw: str) -> tuple[bool, int] | None:
+    """Parse a ``/seek`` argument into ``(is_relative, value_ms)``.
+
+    Accepts:
+
+    * Absolute ``M:S`` / ``M:SS`` / ``H:MM:SS`` (one or two colons; single-
+      or double-digit seconds; minutes and seconds must each be ``< 60``).
+    * Relative ``+N`` / ``-N`` (seconds, sign required).
+    * Bare integer ``N`` — treated as absolute seconds (i.e. ``0:N``).
+
+    Returns ``None`` for unparseable input. ``value_ms`` is the absolute
+    target (when ``is_relative`` is False) or the signed delta in
+    milliseconds (when ``is_relative`` is True). The caller clamps to
+    ``[0, current.duration_ms]``.
+
+    Pure: no side effects, no Lavalink calls, ready for unit tests.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    rel = _SEEK_RELATIVE_RE.match(raw)
+    if rel is not None:
+        sign, digits = rel.groups()
+        seconds = int(digits)
+        return True, (-seconds if sign == "-" else seconds) * 1000
+    abs_match = _SEEK_ABSOLUTE_RE.match(raw)
+    if abs_match is not None:
+        hours_str, minutes_str, seconds_str = abs_match.groups()
+        hours = int(hours_str or 0)
+        minutes = int(minutes_str)
+        seconds = int(seconds_str)
+        # Reject overflowed minute/second components — symmetric guards so
+        # ``0:60:30`` is rejected just like ``1:60``.
+        if seconds >= 60 or minutes >= 60:
+            return None
+        return False, ((hours * 3600) + (minutes * 60) + seconds) * 1000
+    if raw.isdigit():
+        return False, int(raw) * 1000
+    return None
 
 
 def build_queued_track_embed(
