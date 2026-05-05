@@ -24,6 +24,7 @@ def test_config_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_config_parses_guild_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "fake-pwd")
     monkeypatch.setenv("RYZIC_GUILD_IDS", "111, 222 ,333")
     cfg = config.load()
     assert cfg.guild_ids == (111, 222, 333)
@@ -31,6 +32,7 @@ def test_config_parses_guild_ids(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_config_rejects_bad_guild_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "fake-pwd")
     monkeypatch.setenv("RYZIC_GUILD_IDS", "111,oops")
     with pytest.raises(config.ConfigError, match="RYZIC_GUILD_IDS"):
         config.load()
@@ -38,10 +40,10 @@ def test_config_rejects_bad_guild_ids(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "fake-pwd")
     for var in (
         "LAVALINK_HOST",
         "LAVALINK_PORT",
-        "LAVALINK_PASSWORD",
         "RYZIC_CACHE_DIR",
         "RYZIC_CACHE_MAX_GB",
         "RYZIC_LOG_LEVEL",
@@ -58,6 +60,7 @@ def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_config_rejects_bad_int(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "fake-pwd")
     monkeypatch.setenv("LAVALINK_PORT", "not-a-number")
     with pytest.raises(config.ConfigError, match="LAVALINK_PORT"):
         config.load()
@@ -65,6 +68,7 @@ def test_config_rejects_bad_int(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_config_rejects_zero_port(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "fake-pwd")
     monkeypatch.setenv("LAVALINK_PORT", "0")
     with pytest.raises(config.ConfigError, match="LAVALINK_PORT"):
         config.load()
@@ -72,6 +76,7 @@ def test_config_rejects_zero_port(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_config_rejects_negative_cache_max(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "fake-pwd")
     monkeypatch.setenv("RYZIC_CACHE_MAX_GB", "-1")
     with pytest.raises(config.ConfigError, match="RYZIC_CACHE_MAX_GB"):
         config.load()
@@ -79,6 +84,7 @@ def test_config_rejects_negative_cache_max(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_config_rejects_unknown_log_level(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "fake-pwd")
     monkeypatch.setenv("RYZIC_LOG_LEVEL", "VERBOSE")
     with pytest.raises(config.ConfigError, match="RYZIC_LOG_LEVEL"):
         config.load()
