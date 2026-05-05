@@ -282,6 +282,46 @@ def get_track_info(track: lavalink.AudioTrack) -> TrackInfo | None:
     return info if isinstance(info, TrackInfo) else None
 
 
+def format_now_playing_line(
+    track: TrackInfo,
+    position_ms: int,
+    *,
+    paused: bool,
+) -> str:
+    """One-line markdown summary of a now-playing track.
+
+    Shape: ``[**title**](url) — M:SS / M:SS`` with ``(paused)`` appended
+    when applicable. Title is markdown-escaped and length-capped so the
+    line is safe to drop into any embed surface (`/np` description,
+    ``/queue`` top hint, future controller embed).
+    """
+    title = safe_truncate(escape_markdown(track.title), EMBED_FIELD_VALUE_MAX // 2)
+    progress = f"{format_duration(position_ms)} / {format_duration(track.duration_ms)}"
+    if paused:
+        progress = f"{progress} (paused)"
+    return f"[**{title}**]({track.url}) — {progress}"
+
+
+def build_now_playing_embed(
+    track: TrackInfo,
+    position_ms: int,
+    *,
+    paused: bool,
+) -> hikari.Embed:
+    """Build the ``/np`` embed for the currently-playing track.
+
+    Single source of truth for "now playing" rendering — also consumed
+    by the persistent controller embed (#4) so both surfaces stay in
+    visual lock-step.
+    """
+    raw_line = format_now_playing_line(track, position_ms, paused=paused)
+    line = safe_truncate(raw_line, EMBED_DESCRIPTION_MAX)
+    uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
+    embed = hikari.Embed(title="Now playing", description=line)
+    embed.set_footer(safe_truncate(f"by {uploader}", EMBED_FOOTER_MAX))
+    return embed
+
+
 def build_queue_embed(
     *,
     now_playing: TrackInfo,
@@ -299,7 +339,10 @@ def build_queue_embed(
     indexing in the description is global (page 2 starts at "11.", not
     "1."), so users can see where each visible track lives in the queue.
     Title gains a "(page X/Y)" suffix only when ``total_pages > 1`` —
-    short queues that fit on a single page render unchanged.
+    short queues that fit on a single page render unchanged. The
+    currently-playing track is surfaced as a single ``Now: …`` hint at
+    the top of the description — full now-playing detail belongs in
+    ``/np``.
     """
     queue_count = len(queue)
     queue_total_ms = sum(info.duration_ms for info, _ in queue)
@@ -308,32 +351,24 @@ def build_queue_embed(
     if total_pages > 1:
         title = f"{title} — page {page}/{total_pages}"
 
-    np_title = safe_truncate(escape_markdown(now_playing.title), EMBED_FIELD_VALUE_MAX // 2)
-    progress = (
-        f"{format_duration(now_playing_position_ms)} / {format_duration(now_playing.duration_ms)}"
-    )
-    if paused:
-        progress = f"{progress} (paused)"
-    now_playing_value = safe_truncate(
-        f"[**{np_title}**]({now_playing.url})\n{progress}",
-        EMBED_FIELD_VALUE_MAX,
-    )
+    now_line = format_now_playing_line(now_playing, now_playing_position_ms, paused=paused)
+    queue_body = _build_queue_description(queue, page=page)
+    description = f"Now: {now_line}\n\n{queue_body}" if queue_body else f"Now: {now_line}"
 
-    description = _build_queue_description(queue, page=page)
-
-    embed = hikari.Embed(title=title, description=description)
-    embed.add_field(name="Now playing", value=now_playing_value, inline=False)
-    return embed
+    return hikari.Embed(
+        title=title,
+        description=safe_truncate(description, EMBED_DESCRIPTION_MAX),
+    )
 
 
 def _build_queue_description(queue: list[tuple[TrackInfo, int]], *, page: int) -> str:
-    """Format the description body of the ``/queue`` embed for ``page``.
+    """Format the queue-list portion of the ``/queue`` embed for ``page``.
 
-    Returns the empty string when ``queue`` is empty so the caller's
-    embed has no description (the Now playing field stands alone).
-    Indices are global (1-indexed against the full queue), so page 2
-    of a 25-track queue starts at "11." — gives users a stable mental
-    model of where each visible track sits in the playback order.
+    Returns the empty string when ``queue`` is empty so the caller can
+    omit the blank-line separator after the ``Now: …`` hint. Indices are
+    global (1-indexed against the full queue), so page 2 of a 25-track
+    queue starts at "11." — gives users a stable mental model of where
+    each visible track sits in the playback order.
     """
     if not queue:
         return ""

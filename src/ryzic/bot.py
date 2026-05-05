@@ -146,6 +146,7 @@ def main() -> None:
             "ryzic.commands.seek",
             "ryzic.commands.recent",
             "ryzic.commands.replay",
+            "ryzic.commands.np",
         )
         await client.start()
 

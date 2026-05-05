@@ -211,39 +211,41 @@ def test_embed_title_pluralizes_correctly_for_singular_track() -> None:
     assert embed.title == "Queue (1 track · 1:00)"
 
 
-def test_embed_now_playing_field_shows_progress_and_link() -> None:
+def test_embed_now_hint_shows_progress_and_link() -> None:
     embed = ux.build_queue_embed(
         now_playing=make_track_info(title="Now", duration_ms=180_000),
         now_playing_position_ms=60_000,
         paused=False,
         queue=[],
     )
-    field = embed.fields[0]
-    assert field.name == "Now playing"
-    assert "[**Now**](https://www.youtube.com/watch?v=dQw4w9WgXcQ)" in field.value
-    assert "1:00 / 3:00" in field.value
-    assert "(paused)" not in field.value
+    body = embed.description or ""
+    assert body.startswith("Now: [**Now**](https://www.youtube.com/watch?v=dQw4w9WgXcQ)")
+    assert "1:00 / 3:00" in body
+    assert "(paused)" not in body
 
 
-def test_embed_now_playing_field_appends_paused() -> None:
+def test_embed_now_hint_appends_paused() -> None:
     embed = ux.build_queue_embed(
         now_playing=make_track_info(title="Now", duration_ms=180_000),
         now_playing_position_ms=60_000,
         paused=True,
         queue=[],
     )
-    field = embed.fields[0]
-    assert "1:00 / 3:00 (paused)" in field.value
+    body = embed.description or ""
+    assert "1:00 / 3:00 (paused)" in body
 
 
-def test_embed_description_is_empty_when_queue_empty() -> None:
+def test_embed_description_is_only_the_now_hint_when_queue_empty() -> None:
     embed = ux.build_queue_embed(
         now_playing=make_track_info(title="Now"),
         now_playing_position_ms=0,
         paused=False,
         queue=[],
     )
-    assert embed.description in (None, "")
+    body = embed.description or ""
+    assert body.startswith("Now: ")
+    # Empty queue → no list body and no blank-line separator.
+    assert "\n\n" not in body
 
 
 def test_embed_description_lists_queued_entries_with_requester_mention() -> None:
