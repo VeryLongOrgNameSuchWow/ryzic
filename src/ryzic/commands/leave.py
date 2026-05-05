@@ -16,7 +16,7 @@ import hikari
 import lavalink
 import lightbulb
 
-from .. import lavalink_glue
+from .. import lavalink_glue, now_playing
 from ..voice_check import ensure_same_voice
 
 loader = lightbulb.Loader()
@@ -60,4 +60,5 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
     bot = cast(hikari.GatewayBot, ctx.client.app)
     await bot.update_voice_state(guild_id, None)
 
+    await now_playing.teardown(bot, guild_id)
     await ctx.respond("Left voice channel. Queue cleared.")

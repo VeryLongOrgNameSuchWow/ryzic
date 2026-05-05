@@ -16,6 +16,7 @@ A self-hostable Discord music bot. Plays YouTube audio in voice channels via [La
 
 - Eight slash commands: `/play`, `/skip`, `/queue`, `/pause`, `/resume`, `/leave`, `/recent`, `/replay`.
 - Per-guild queue with paged display.
+- Persistent now-playing controller embed in the channel where `/play` was last used, with pause/resume · skip · stop buttons that drive the same code paths as the slash commands.
 - LRU audio cache backed by SQLite — re-playing a track skips the network round-trip and survives transient yt-dlp regressions.
 - Auto-leave after 5 minutes idle in voice (sensible Discord etiquette).
 - One-command deploy via `docker compose`.

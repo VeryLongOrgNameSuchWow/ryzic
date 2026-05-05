@@ -8,7 +8,7 @@ import hikari
 import lavalink
 import lightbulb
 
-from .. import lavalink_glue
+from .. import lavalink_glue, now_playing
 from ..voice_check import ensure_same_voice
 
 loader = lightbulb.Loader()
@@ -48,3 +48,4 @@ async def _handle_pause(ctx: lightbulb.Context) -> None:
 
     await player.set_pause(True)
     await ctx.respond("Paused.")
+    await now_playing.refresh(cast(hikari.GatewayBot, ctx.client.app), guild_id)
