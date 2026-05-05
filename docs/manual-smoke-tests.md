@@ -22,6 +22,7 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 - [ ] `/play <youtube_track_url>` (e.g. `https://www.youtube.com/watch?v=dQw4w9WgXcQ`) plays audio in your voice channel within ~3s.
 - [ ] `/play <youtube_playlist_url>` queues every track in the playlist; the embed reports the correct count and total duration.
 - [ ] `/queue` shows the currently-playing track with `mm:ss / mm:ss` progress and the next entries (paged at 10).
+- [ ] `/queue private:True` shows the same embed but only to the invoker (ephemeral); other users in the channel don't see it.
 - [ ] `/skip` advances to the next track immediately; the embed names the skipped title.
 - [ ] `/pause` halts playback; `/resume` resumes from the same position (no audible jump).
 - [ ] `/leave` disconnects the bot and clears the queue; `/queue` afterwards reports empty.

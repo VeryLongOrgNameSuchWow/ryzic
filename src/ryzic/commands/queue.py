@@ -1,8 +1,13 @@
-"""``/queue`` slash command (M1 §3).
+"""``/queue`` slash command (M1 §3, optional ``private`` flag per issue #100).
 
 Renders the now-playing track plus the upcoming queue. No voice
 precondition — queue introspection is read-only and useful from any
 text channel in the guild.
+
+The ``private`` argument (issue #100) routes the success embed to an
+ephemeral response so the invoker can check the queue without spamming
+a busy text channel. Empty/error paths are ephemeral regardless —
+failure responses don't pollute the channel either way.
 """
 
 from __future__ import annotations
@@ -25,12 +30,18 @@ class Queue(
     description="Show the current track and upcoming queue.",
     contexts=[hikari.ApplicationContextType.GUILD],
 ):
+    private = lightbulb.boolean(
+        "private",
+        "Only you see the response (default: False — public).",
+        default=False,
+    )
+
     @lightbulb.invoke
     async def invoke(self, ctx: lightbulb.Context) -> None:
-        await _handle_queue(ctx)
+        await _handle_queue(ctx, private=self.private)
 
 
-async def _handle_queue(ctx: lightbulb.Context) -> None:
+async def _handle_queue(ctx: lightbulb.Context, *, private: bool = False) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
         await ctx.respond("Run /queue in a server.", ephemeral=True)
@@ -70,4 +81,4 @@ async def _handle_queue(ctx: lightbulb.Context) -> None:
         paused=player.paused,
         queue=queue_entries,
     )
-    await ctx.respond(embed=embed)
+    await ctx.respond(embed=embed, ephemeral=private)
