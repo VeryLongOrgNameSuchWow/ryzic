@@ -52,8 +52,9 @@ async def _handle_replay(ctx: lightbulb.Context, position: int) -> None:
     # shorter (boot-fresh guild), so we still bounds-check against the
     # live length here.
     if position > len(history):
+        plural = "" if len(history) == 1 else "s"
         await ctx.respond(
-            f"Only {len(history)} track(s) in history.",
+            f"Only {len(history)} track{plural} in history.",
             ephemeral=True,
         )
         return

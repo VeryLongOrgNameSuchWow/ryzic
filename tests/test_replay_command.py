@@ -77,7 +77,7 @@ async def test_position_out_of_range_returns_friendly_ephemeral(
     await replay_module._handle_replay(ctx, position=5)
 
     fake = cast(Any, ctx)
-    assert "Only 1 track" in str(fake.responses[0][0])
+    assert fake.responses[0][0] == "Only 1 track in history."
     assert fake.responses[0][1].get("ephemeral") is True
     assert play_calls == []
 
@@ -95,6 +95,11 @@ async def test_position_one_routes_through_handle_play_with_newest_url(
     # Position 1 = newest = "B".
     assert len(play_calls) == 1
     assert play_calls[0][1] == "https://x/b"
+    # Pin the defer-once contract documented at replay.py:62-64 so a
+    # future refactor that drops the defer (or moves it into
+    # ``_handle_play`` and double-defers from ``Play.invoke``) is caught.
+    fake = cast(Any, ctx)
+    assert fake.defer_calls == 1
 
 
 async def test_position_two_picks_older_entry(
