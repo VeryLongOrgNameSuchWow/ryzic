@@ -16,10 +16,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from pydantic import BaseModel, ConfigDict
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import YoutubeDLError
 
@@ -71,8 +71,9 @@ _MAX_ERROR_LEN: Final = 200
 _PATH_LIKE_RE: Final = re.compile(r"(?<![:/])(?:[A-Za-z]:)?/[A-Za-z0-9_.\\-][A-Za-z0-9_./\\-]*")
 
 
-@dataclass(frozen=True)
-class TrackInfo:
+class TrackInfo(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
     video_id: str
     url: str
     title: str
@@ -80,8 +81,9 @@ class TrackInfo:
     duration_ms: int
 
 
-@dataclass(frozen=True)
-class PlaylistInfo:
+class PlaylistInfo(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
     playlist_id: str
     title: str
     entries: list[TrackInfo]
