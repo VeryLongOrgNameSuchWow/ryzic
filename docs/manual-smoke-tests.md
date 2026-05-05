@@ -26,6 +26,16 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 - [ ] `/pause` halts playback; `/resume` resumes from the same position (no audible jump).
 - [ ] `/leave` disconnects the bot and clears the queue; `/queue` afterwards reports empty.
 
+## Track history
+
+- [ ] `/recent` with a fresh boot reports `No tracks have played yet.` (ephemeral).
+- [ ] After 2-3 tracks complete (or are skipped), `/recent` lists them newest-first with clickable titles and a "Use /replay …" footer.
+- [ ] `/replay` (no argument) re-queues the most recent finished track via the same code path as `/play` (cache hit, no re-download).
+- [ ] `/replay 2` re-queues the second-most-recent track.
+- [ ] `/replay 99` (out of range) returns an ephemeral "Only N track(s) in history."
+- [ ] After more than 25 tracks have played, `/recent` caps the list at 25 entries (oldest fall off).
+- [ ] After `docker compose restart ryzic`, `/recent` reports empty — history is in-memory only by design.
+
 ## Auto-leave
 
 - [ ] After the final track in a queue ends, the bot stays connected briefly, then disconnects after ~5 minutes of idle and posts `Idle for 5 minutes — disconnecting.` in the channel where `/play` was last used.

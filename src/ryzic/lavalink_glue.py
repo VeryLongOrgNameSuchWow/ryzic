@@ -51,7 +51,7 @@ import hikari
 import lavalink
 from lavalink.common import VoiceServerUpdatePayload, VoiceStateUpdatePayload
 
-from . import audio_cache, config
+from . import audio_cache, config, track_history, ux
 
 _log = logging.getLogger(__name__)
 
@@ -244,6 +244,42 @@ async def _release_track(track: lavalink.AudioTrack | None) -> None:
         _log.exception("failed to release audio cache entry %s", video_id)
 
 
+# EndReason values that mean "the user actually heard this track".
+# FINISHED = natural end. REPLACED = the next track took over via
+# ``player.play(track=...)`` (e.g. ``/skip``). LOAD_FAILED / STOPPED /
+# CLEANUP are excluded — failures were never heard, ``/leave`` winds the
+# session down explicitly, and Lavalink cleanup events don't correspond
+# to user-facing playback. A tuple (rather than a frozenset) because
+# ``lavalink.server.EndReason`` overrides ``__eq__`` without preserving
+# ``__hash__``, so the values are not hashable.
+_HEARD_END_REASONS: tuple[lavalink.server.EndReason, ...] = (
+    lavalink.server.EndReason.FINISHED,
+    lavalink.server.EndReason.REPLACED,
+)
+
+
+def _record_history(
+    guild_id: int,
+    track: lavalink.AudioTrack | None,
+    reason: lavalink.server.EndReason,
+) -> None:
+    """Append ``track`` to ``guild_id``'s history if the user actually heard it.
+
+    Reads the original :class:`~ryzic.ytdlp.TrackInfo` off the lavalink
+    AudioTrack via :func:`ux.get_track_info`. When metadata is absent
+    (a future code path that bypasses ``attach_track_info``) we drop
+    the entry rather than fabricate one — history is a UX surface, not
+    a play-count store, so a missing-metadata gap is preferable to a
+    half-populated row.
+    """
+    if track is None or reason not in _HEARD_END_REASONS:
+        return
+    info = ux.get_track_info(track)
+    if info is None:
+        return
+    track_history.record(guild_id, info)
+
+
 async def clear_queue_releasing(player: lavalink.DefaultPlayer) -> None:
     """Release audio cache pins for every queued track, then clear the queue.
 
@@ -308,6 +344,7 @@ class EventHandler:
             _track_title(event.track),
             event.reason,
         )
+        _record_history(guild_id, event.track, event.reason)
         await _release_track(event.track)
 
         # NEVER call player.play() here; the default player auto-advances

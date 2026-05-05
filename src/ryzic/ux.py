@@ -57,6 +57,12 @@ _ELLIPSIS: Final = "…"
 # collapse to a single "… and N more" line per M1 §3.
 _QUEUE_PREVIEW_MAX: Final = 10
 
+# Number of history entries enumerated inline in ``/recent``. The ring's
+# hard cap (``track_history.MAX_HISTORY_SIZE``) is the upper bound; the
+# preview cap exists so a future widening of that constant cannot
+# quietly blow Discord's description budget.
+_RECENT_PREVIEW_MAX: Final = 25
+
 # Namespaced ``AudioTrack.extra`` key for the stashed :class:`TrackInfo`.
 _TRACK_INFO_EXTRA_KEY: Final = "ryzic_track_info"
 
@@ -331,3 +337,28 @@ def _build_queue_description(queue: list[tuple[TrackInfo, int]]) -> str:
     if overflow > 0:
         lines.append(f"… and {overflow} more")
     return safe_truncate("\n".join(lines), EMBED_DESCRIPTION_MAX)
+
+
+def build_recent_embed(history: list[TrackInfo]) -> hikari.Embed:
+    """Build the ``/recent`` embed (issue #96).
+
+    ``history`` is newest-first. Caller guarantees non-empty (the
+    command short-circuits on the empty case with a friendly ephemeral).
+    Lines are 1-indexed so ``/replay <N>`` semantics match the displayed
+    number directly.
+    """
+    preview = history[:_RECENT_PREVIEW_MAX]
+    lines = [
+        (
+            f"{idx}. [{escape_markdown(info.title)}]({info.url}) — "
+            f"{format_duration(info.duration_ms)}"
+        )
+        for idx, info in enumerate(preview, start=1)
+    ]
+    overflow = len(history) - len(preview)
+    if overflow > 0:
+        lines.append(f"… and {overflow} more")
+    description = safe_truncate("\n".join(lines), EMBED_DESCRIPTION_MAX)
+    embed = hikari.Embed(title=f"Recently played ({len(history)})", description=description)
+    embed.set_footer("Use /replay <position> to re-queue.")
+    return embed

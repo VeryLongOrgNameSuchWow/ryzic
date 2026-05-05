@@ -338,3 +338,34 @@ def test_playlist_embed_escapes_markdown_in_title() -> None:
     assert embed.description is not None
     assert "**hax**" not in embed.description
     assert "\\*\\*hax\\*\\*" in embed.description
+
+
+# ---------------------------------------------------------------------------
+# build_recent_embed (issue #96)
+# ---------------------------------------------------------------------------
+
+
+def test_recent_embed_lists_tracks_in_order_and_counts() -> None:
+    history = [
+        _track(video_id="aaaaaaaaaaa", title="Newest"),
+        _track(video_id="bbbbbbbbbbb", title="Older"),
+    ]
+    embed = ux.build_recent_embed(history)
+
+    assert isinstance(embed, hikari.Embed)
+    assert embed.title == "Recently played (2)"
+    description = embed.description or ""
+    assert "1. [Newest]" in description
+    assert "2. [Older]" in description
+    assert embed.footer is not None
+    assert (embed.footer.text or "").startswith("Use /replay")
+
+
+def test_recent_embed_escapes_markdown_in_titles() -> None:
+    history = [_track(video_id="aaaaaaaaaaa", title="**evil** [link](http://x)")]
+    embed = ux.build_recent_embed(history)
+
+    assert embed.description is not None
+    assert "**evil**" not in embed.description
+    assert "\\*\\*evil\\*\\*" in embed.description
+    assert "\\[link\\]" in embed.description

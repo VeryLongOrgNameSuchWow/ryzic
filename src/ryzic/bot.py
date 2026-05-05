@@ -143,6 +143,8 @@ def main() -> None:
             "ryzic.commands.resume",
             "ryzic.commands.leave",
             "ryzic.commands.seek",
+            "ryzic.commands.recent",
+            "ryzic.commands.replay",
         )
         await client.start()
 
