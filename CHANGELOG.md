@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.3.0...v0.4.0) (2026-05-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* LAVALINK_PASSWORD is now required at startup. Operators relying on the previous default literal must set it explicitly in .env; the password must match between ryzic and the lavalink container.
+
+### Features
+
+* drop literal LAVALINK_PASSWORD fallback ([#106](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/106)) ([a6775c9](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/a6775c930aac84e03a09d86e985da4136000db57))
+
+
+### Documentation
+
+* **readme:** add cookies-mount recipe and compose.override.yaml.example ([#104](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/104)) ([9c0f145](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/9c0f145b7ebdfa64bff2f43271a118ce81f15088))
+
 ## [0.3.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.2.2...v0.3.0) (2026-05-04)
 
 
