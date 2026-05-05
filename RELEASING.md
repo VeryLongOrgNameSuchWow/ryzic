@@ -6,10 +6,11 @@
 
 1. Land conventional-commit PRs on `main`.
 2. release-please opens (or refreshes) a release PR titled `chore(main): release X.Y.Z`.
-3. Review the release PR (sanity-check the `CHANGELOG.md` diff + the version bump).
-4. Merge the release PR.
-5. Merging creates the `vX.Y.Z` tag and the GitHub Release with curated notes.
-6. The tag push fires `release.yml`, which builds and pushes a Docker image to GHCR with three tags: `:X.Y.Z`, `:X.Y`, `:latest`.
+3. `release-please.yml` follows up by rewriting `compose.yaml`'s image pin to `:X.Y` (no-op on patch releases; bumps the pin on minor releases) and pushes the change onto the release PR's branch so the diff is visible at review time.
+4. Review the release PR (sanity-check the `CHANGELOG.md` diff, the version bump, and the `compose.yaml` pin if it changed).
+5. Merge the release PR.
+6. Merging creates the `vX.Y.Z` tag and the GitHub Release with curated notes.
+7. The tag push fires `release.yml`, which builds and pushes a Docker image to GHCR with three tags: `:X.Y.Z`, `:X.Y`, `:latest`.
 
 That's it. The cut is hands-off as long as conventional commits are clean.
 

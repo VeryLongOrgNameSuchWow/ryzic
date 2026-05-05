@@ -1,9 +1,12 @@
 services:
   ryzic:
-    # Pinned to the `:0.1` minor tag: `docker compose pull` picks up 0.1.x
-    # patch releases automatically. Bumping to a future `:0.2` is a manual
-    # edit — pre-1.0 minor bumps may include breaking changes (see SEMVER.md).
-    image: ghcr.io/verylongorgnamesuchwow/ryzic:0.1
+    # Pinned to the current minor tag so `docker compose pull` picks up
+    # patch releases automatically. release-please auto-bumps the major.minor
+    # part on each minor release (see .github/workflows/release-please.yml);
+    # operators run `docker compose pull && docker compose up -d` after each
+    # release. Pre-1.0 minor bumps may include breaking changes — read the
+    # release notes (see SEMVER.md).
+    image: ghcr.io/verylongorgnamesuchwow/ryzic:0.3
     depends_on:
       lavalink:
         condition: service_healthy
