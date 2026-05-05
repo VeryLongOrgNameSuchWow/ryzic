@@ -123,6 +123,41 @@ async def test_command_responds_with_embed_when_playing() -> None:
     assert embed.title is not None and embed.title.startswith("Queue (1 tracks")
 
 
+async def test_default_response_is_public() -> None:
+    """``/queue`` without ``private:True`` posts the embed to the channel."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.current = make_track_with_info(make_track_info(title="Now"))
+
+    await queue_module._handle_queue(ctx)
+
+    fake = cast(Any, ctx)
+    # Single response, public (ephemeral=False). Discord-side this means
+    # the embed shows in the channel for everyone.
+    assert fake.responses[0][1].get("ephemeral") is False
+
+
+async def test_private_true_makes_response_ephemeral() -> None:
+    """``private=True`` routes the embed to an ephemeral response (issue #100)."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.current = make_track_with_info(make_track_info(title="Now"))
+
+    await queue_module._handle_queue(ctx, private=True)
+
+    fake = cast(Any, ctx)
+    assert fake.responses[0][1].get("ephemeral") is True
+    # Embed itself is unchanged — same builder, same content.
+    embed = fake.responses[0][1]["embed"]
+    assert isinstance(embed, hikari.Embed)
+
+
 async def test_queued_tracks_without_metadata_are_silently_skipped() -> None:
     """A bare AudioTrack in the queue (no metadata) is dropped from the listing."""
     bot = FakeBot()
