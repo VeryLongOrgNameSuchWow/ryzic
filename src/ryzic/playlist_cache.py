@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import parse_qs, urlparse
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .errors import FetchFailed, InvalidVideoID
 from .ytdlp import PlaylistInfo, resolve_playlist
@@ -40,6 +40,21 @@ _PLAYLIST_ID_RE: Final = re.compile(r"[A-Za-z0-9_-]{10,50}")
 _TTL_SECONDS: Final = 24 * 60 * 60
 
 _PLAYLISTS_DIR: Final = "playlists"
+
+
+class _CacheEntry(BaseModel):
+    """Wire shape of a cached playlist file.
+
+    ``info`` is the JSON-serialized :class:`PlaylistInfo` body kept opaque
+    here so the persistence wrapper can't accidentally collide with a
+    field name on the model (e.g. a future ``fetched_at`` on
+    ``PlaylistInfo`` itself).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    fetched_at: int
+    info: str
 
 
 def _validate_playlist_id(playlist_id: str) -> None:
@@ -100,20 +115,13 @@ async def read(playlist_id: str, cache_root: Path) -> tuple[PlaylistInfo, int] |
         return None
     if payload is None:
         return None
-    if not isinstance(payload, dict):
-        _log.warning("dropping malformed playlist cache entry: %s", path)
-        return None
-    fetched_at = payload.get("fetched_at")
-    raw_info = payload.get("info")
-    if not isinstance(fetched_at, int) or not isinstance(raw_info, str):
-        _log.warning("dropping malformed playlist cache entry: %s", path)
-        return None
     try:
-        info = PlaylistInfo.model_validate_json(raw_info)
+        entry = _CacheEntry.model_validate(payload)
+        info = PlaylistInfo.model_validate_json(entry.info)
     except ValidationError:
         _log.warning("dropping malformed playlist cache entry: %s", path)
         return None
-    return info, fetched_at
+    return info, entry.fetched_at
 
 
 async def write(
@@ -137,8 +145,8 @@ async def write(
     path = _path_for(playlist_id, cache_root)
     if fetched_at is None:
         fetched_at = int(time.time())
-    payload = {"fetched_at": fetched_at, "info": info.model_dump_json()}
-    await asyncio.to_thread(_write_sync, path, payload)
+    entry = _CacheEntry(fetched_at=fetched_at, info=info.model_dump_json())
+    await asyncio.to_thread(_write_sync, path, entry.model_dump())
     return fetched_at
 
 

@@ -79,7 +79,7 @@ async def test_read_structurally_invalid_returns_none(tmp_path: Path) -> None:
 
 
 async def test_read_missing_fetched_at_returns_none(tmp_path: Path) -> None:
-    # ``fetched_at`` lives outside the dataclass; without it the file is
+    # ``fetched_at`` lives outside ``PlaylistInfo``; without it the file is
     # an unusable cache entry (no way to compute staleness).
     path = tmp_path / "playlists" / f"{PLIST_ID}.json"
     path.parent.mkdir(parents=True)
