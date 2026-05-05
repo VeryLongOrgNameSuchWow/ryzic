@@ -706,6 +706,7 @@ def test_is_valid_discord_endpoint_allowlist() -> None:
 class _IdTrack:
     title: str = "song"
     identifier: str = "abc12345"
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -717,7 +718,12 @@ class _PlayerWithGuild:
 class _EndEvent:
     track: _IdTrack | None
     player: _PlayerWithGuild
-    reason: str = "FINISHED"
+    # ``lavalink.server.EndReason`` overrides ``__eq__`` without preserving
+    # ``__hash__``, which trips dataclass's mutable-default guard. Wrap in
+    # a factory so the enum value is sourced fresh per instance.
+    reason: lavalink.server.EndReason = field(
+        default_factory=lambda: lavalink.server.EndReason.FINISHED
+    )
 
 
 @dataclass
@@ -1114,3 +1120,140 @@ async def test_node_disconnected_releases_queued_pins_for_every_player() -> None
         assert all(p.queue == [] for p in players)
     finally:
         audio_cache.set_audio_cache(None)
+
+
+# ---------------------------------------------------------------------------
+# Track history (issue #96)
+# ---------------------------------------------------------------------------
+
+
+def _track_with_info(title: str, *, identifier: str = "abc12345") -> _IdTrack:
+    """Build an _IdTrack with an attached TrackInfo (matches /play's wiring)."""
+    from ryzic import ux
+    from tests._command_helpers import make_track_info
+
+    track = _IdTrack(identifier=identifier)
+    info = make_track_info(title=title)
+    ux.attach_track_info(cast(lavalink.AudioTrack, track), info)
+    return track
+
+
+async def test_track_end_records_history_on_finished() -> None:
+    """A naturally-finishing track is appended to the per-guild history."""
+    from ryzic import track_history
+
+    track_history._reset_state_for_test()
+    bot = _FakeApp()
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    track = _track_with_info("Song A")
+
+    await handler.on_track_end(
+        cast(
+            lavalink.TrackEndEvent,
+            _EndEvent(
+                track=track,
+                player=_PlayerWithGuild(),
+                reason=lavalink.server.EndReason.FINISHED,
+            ),
+        )
+    )
+
+    history = track_history.get(111)
+    assert [t.title for t in history] == ["Song A"]
+
+
+async def test_track_end_records_history_on_replaced() -> None:
+    """``/skip`` lands as REPLACED — still counts as 'user heard most of it'."""
+    from ryzic import track_history
+
+    track_history._reset_state_for_test()
+    bot = _FakeApp()
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    track = _track_with_info("Skipped")
+
+    await handler.on_track_end(
+        cast(
+            lavalink.TrackEndEvent,
+            _EndEvent(
+                track=track,
+                player=_PlayerWithGuild(),
+                reason=lavalink.server.EndReason.REPLACED,
+            ),
+        )
+    )
+
+    assert [t.title for t in track_history.get(111)] == ["Skipped"]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        lavalink.server.EndReason.LOAD_FAILED,
+        lavalink.server.EndReason.STOPPED,
+        lavalink.server.EndReason.CLEANUP,
+    ],
+)
+async def test_track_end_does_not_record_for_excluded_reasons(
+    reason: lavalink.server.EndReason,
+) -> None:
+    """LOAD_FAILED / STOPPED / CLEANUP must NOT enter history."""
+    from ryzic import track_history
+
+    track_history._reset_state_for_test()
+    bot = _FakeApp()
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    track = _track_with_info("Never Counted")
+
+    await handler.on_track_end(
+        cast(
+            lavalink.TrackEndEvent,
+            _EndEvent(track=track, player=_PlayerWithGuild(), reason=reason),
+        )
+    )
+
+    assert track_history.get(111) == []
+
+
+async def test_track_end_without_metadata_does_not_record() -> None:
+    """A track with no attached TrackInfo is dropped — no half-populated rows."""
+    from ryzic import track_history
+
+    track_history._reset_state_for_test()
+    bot = _FakeApp()
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    bare = _IdTrack(identifier="bare0001")  # no attach_track_info call
+
+    await handler.on_track_end(
+        cast(
+            lavalink.TrackEndEvent,
+            _EndEvent(
+                track=bare,
+                player=_PlayerWithGuild(),
+                reason=lavalink.server.EndReason.FINISHED,
+            ),
+        )
+    )
+
+    assert track_history.get(111) == []
+
+
+async def test_track_end_with_none_track_does_not_record() -> None:
+    """``TrackEndEvent`` carries ``Optional[AudioTrack]``; ``None`` short-circuits."""
+    from ryzic import track_history
+
+    track_history._reset_state_for_test()
+    bot = _FakeApp()
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+
+    await handler.on_track_end(
+        cast(
+            lavalink.TrackEndEvent,
+            _EndEvent(
+                track=None,
+                player=_PlayerWithGuild(),
+                reason=lavalink.server.EndReason.FINISHED,
+            ),
+        )
+    )
+
+    assert track_history.get(111) == []

@@ -87,9 +87,13 @@ class FakeContext:
         self.channel_id = channel_id
         self.client = FakeLightbulbClient(bot)
         self.responses: list[tuple[Any, dict[str, Any]]] = []
+        self.defer_calls: int = 0
 
     async def respond(self, content: Any = None, **kwargs: Any) -> None:
         self.responses.append((content, kwargs))
+
+    async def defer(self) -> None:
+        self.defer_calls += 1
 
 
 @dataclass
