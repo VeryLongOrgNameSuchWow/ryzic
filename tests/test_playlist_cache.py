@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import time_machine
 
 from ryzic import playlist_cache
 from ryzic.errors import FetchFailed, InvalidVideoID
@@ -215,7 +216,7 @@ async def test_extract_playlist_id_picks_first_when_list_param_repeats() -> None
 )
 def test_is_stale_boundary(offset_seconds: int, expected_stale: bool) -> None:
     now = 1_700_000_000
-    with patch.object(playlist_cache.time, "time", return_value=now):
+    with time_machine.travel(now, tick=False):
         assert playlist_cache.is_stale(now - offset_seconds) is expected_stale
 
 
