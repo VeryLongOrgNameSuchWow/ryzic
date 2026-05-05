@@ -18,13 +18,14 @@ import json
 import logging
 import re
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Final
 from urllib.parse import parse_qs, urlparse
 
+from pydantic import ValidationError
+
 from .errors import FetchFailed, InvalidVideoID
-from .ytdlp import PlaylistInfo, TrackInfo, resolve_playlist
+from .ytdlp import PlaylistInfo, resolve_playlist
 
 _log = logging.getLogger(__name__)
 
@@ -60,42 +61,6 @@ def _path_for(playlist_id: str, cache_root: Path) -> Path:
     except ValueError as exc:
         raise InvalidVideoID(f"playlist_id resolves outside cache_root: {playlist_id!r}") from exc
     return derived
-
-
-def _serialize(info: PlaylistInfo, fetched_at: int) -> dict[str, Any]:
-    return {
-        "playlist_id": info.playlist_id,
-        "title": info.title,
-        "fetched_at": fetched_at,
-        "entries": [asdict(track) for track in info.entries],
-    }
-
-
-def _deserialize(payload: dict[str, Any]) -> PlaylistInfo:
-    """Rebuild a :class:`PlaylistInfo` from a cache file.
-
-    Raises :class:`ValueError`/:class:`KeyError`/:class:`TypeError` for
-    any structural mismatch — the caller treats a malformed file as a
-    cache miss rather than crashing.
-    """
-    playlist_id = payload["playlist_id"]
-    title = payload["title"]
-    raw_entries = payload["entries"]
-    if not isinstance(playlist_id, str) or not isinstance(title, str):
-        raise ValueError("playlist_id/title must be strings")
-    if not isinstance(raw_entries, list):
-        raise ValueError("entries must be a list")
-    entries = [
-        TrackInfo(
-            video_id=str(e["video_id"]),
-            url=str(e["url"]),
-            title=str(e["title"]),
-            uploader=str(e["uploader"]),
-            duration_ms=int(e["duration_ms"]),
-        )
-        for e in raw_entries
-    ]
-    return PlaylistInfo(playlist_id=playlist_id, title=title, entries=entries)
 
 
 def _read_sync(path: Path) -> dict[str, Any] | None:
@@ -135,13 +100,17 @@ async def read(playlist_id: str, cache_root: Path) -> tuple[PlaylistInfo, int] |
         return None
     if payload is None:
         return None
-    try:
-        info = _deserialize(payload)
-    except (ValueError, KeyError, TypeError):
+    if not isinstance(payload, dict):
         _log.warning("dropping malformed playlist cache entry: %s", path)
         return None
     fetched_at = payload.get("fetched_at")
-    if not isinstance(fetched_at, int):
+    raw_info = payload.get("info")
+    if not isinstance(fetched_at, int) or not isinstance(raw_info, str):
+        _log.warning("dropping malformed playlist cache entry: %s", path)
+        return None
+    try:
+        info = PlaylistInfo.model_validate_json(raw_info)
+    except ValidationError:
         _log.warning("dropping malformed playlist cache entry: %s", path)
         return None
     return info, fetched_at
@@ -168,7 +137,7 @@ async def write(
     path = _path_for(playlist_id, cache_root)
     if fetched_at is None:
         fetched_at = int(time.time())
-    payload = _serialize(info, fetched_at=fetched_at)
+    payload = {"fetched_at": fetched_at, "info": info.model_dump_json()}
     await asyncio.to_thread(_write_sync, path, payload)
     return fetched_at
 
