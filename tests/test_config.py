@@ -31,9 +31,15 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+def _set_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set the required env vars so ``config.load()`` reaches the default branches."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "x")
+
+
 def test_youtube_cookies_path_unset_resolves_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     cfg = config.load()
     assert cfg.youtube_cookies_path is None
 
@@ -42,7 +48,7 @@ def test_youtube_cookies_path_empty_resolves_to_none(monkeypatch: pytest.MonkeyP
     # Empty string is treated identically to unset — neither implies
     # the operator opted in. Mirrors the .env.example commenting style.
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_YOUTUBE_COOKIES_PATH", "")
     cfg = config.load()
     assert cfg.youtube_cookies_path is None
@@ -52,7 +58,7 @@ def test_youtube_cookies_path_set_resolves_to_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     cookies = tmp_path / "youtube-cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n")
     monkeypatch.setenv("RYZIC_YOUTUBE_COOKIES_PATH", str(cookies))
@@ -67,7 +73,7 @@ def test_youtube_cookies_path_missing_file_raises(
     # silently no-op (yt-dlp loads cookies via os.access(R_OK) and skips
     # if the file is missing). Now it must fail fast at startup.
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_YOUTUBE_COOKIES_PATH", str(tmp_path / "does-not-exist.txt"))
     with pytest.raises(config.ConfigError, match="RYZIC_YOUTUBE_COOKIES_PATH"):
         config.load()
@@ -80,7 +86,7 @@ def test_youtube_cookies_path_directory_raises(
     # (e.g. forgot the filename) get a clear error rather than a yt-dlp
     # IsADirectoryError on first /play.
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_YOUTUBE_COOKIES_PATH", str(tmp_path))
     with pytest.raises(config.ConfigError, match="RYZIC_YOUTUBE_COOKIES_PATH"):
         config.load()
@@ -93,7 +99,7 @@ def test_youtube_cookies_path_unreadable_raises(
     # gets the same fail-fast treatment so the operator sees the issue at
     # startup rather than via a confusing downstream rejection.
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     cookies = tmp_path / "youtube-cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n")
     cookies.chmod(0o000)
@@ -113,7 +119,7 @@ def test_youtube_cookies_path_unreadable_raises(
 
 def test_auto_leave_seconds_unset_defaults_to_300(monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     cfg = config.load()
     assert cfg.auto_leave_seconds == 300
 
@@ -122,7 +128,7 @@ def test_auto_leave_seconds_empty_defaults_to_300(monkeypatch: pytest.MonkeyPatc
     # Empty string mirrors unset (matches the project's existing convention,
     # see RYZIC_YOUTUBE_COOKIES_PATH and RYZIC_GUILD_IDS).
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_AUTOLEAVE_SECONDS", "")
     cfg = config.load()
     assert cfg.auto_leave_seconds == 300
@@ -130,7 +136,7 @@ def test_auto_leave_seconds_empty_defaults_to_300(monkeypatch: pytest.MonkeyPatc
 
 def test_auto_leave_seconds_default_value(monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_AUTOLEAVE_SECONDS", "300")
     cfg = config.load()
     assert cfg.auto_leave_seconds == 300
@@ -140,7 +146,7 @@ def test_auto_leave_seconds_zero_disables(monkeypatch: pytest.MonkeyPatch) -> No
     # 0 is the documented sentinel meaning "never auto-leave" — must parse
     # successfully (where _parse_positive_int would reject it).
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_AUTOLEAVE_SECONDS", "0")
     cfg = config.load()
     assert cfg.auto_leave_seconds == 0
@@ -148,7 +154,7 @@ def test_auto_leave_seconds_zero_disables(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_auto_leave_seconds_custom_positive(monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_AUTOLEAVE_SECONDS", "60")
     cfg = config.load()
     assert cfg.auto_leave_seconds == 60
@@ -156,7 +162,7 @@ def test_auto_leave_seconds_custom_positive(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_auto_leave_seconds_negative_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_AUTOLEAVE_SECONDS", "-1")
     with pytest.raises(config.ConfigError, match="RYZIC_AUTOLEAVE_SECONDS"):
         config.load()
@@ -164,7 +170,38 @@ def test_auto_leave_seconds_negative_raises(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_auto_leave_seconds_non_integer_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    _set_required(monkeypatch)
     monkeypatch.setenv("RYZIC_AUTOLEAVE_SECONDS", "abc")
     with pytest.raises(config.ConfigError, match="RYZIC_AUTOLEAVE_SECONDS"):
         config.load()
+
+
+# ---------------------------------------------------------------------------
+# LAVALINK_PASSWORD now required (issue #86)
+# ---------------------------------------------------------------------------
+
+
+def test_lavalink_password_unset_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The literal "youshallnotpass" default was dropped — operators must set
+    # the password explicitly. A missing value fails fast at startup.
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    with pytest.raises(config.ConfigError, match="LAVALINK_PASSWORD"):
+        config.load()
+
+
+def test_lavalink_password_empty_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Empty string is treated as unset by ``_require`` — same fail-fast.
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "")
+    with pytest.raises(config.ConfigError, match="LAVALINK_PASSWORD"):
+        config.load()
+
+
+def test_lavalink_password_set_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    monkeypatch.setenv("LAVALINK_PASSWORD", "secret")
+    cfg = config.load()
+    assert cfg.lavalink_password == "secret"

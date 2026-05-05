@@ -21,7 +21,7 @@ services:
     environment:
       _JAVA_OPTIONS: "-Xmx512m"
       SERVER_PORT: "2333"
-      LAVALINK_SERVER_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
+      LAVALINK_SERVER_PASSWORD: ${LAVALINK_PASSWORD:?LAVALINK_PASSWORD must be set in .env (see .env.example)}
     volumes:
       - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
       - lavalink_plugins:/opt/Lavalink/plugins

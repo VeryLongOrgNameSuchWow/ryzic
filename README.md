@@ -100,7 +100,7 @@ All configuration is via environment variables (read from `.env` by `docker comp
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `DISCORD_BOT_TOKEN` | yes | — | Bot token from the Discord Developer Portal. |
-| `LAVALINK_PASSWORD` | no | `youshallnotpass` | Must match `lavalink/application.yml`. Change both together. |
+| `LAVALINK_PASSWORD` | yes | — | Shared secret between ryzic and the Lavalink container. Generate with `openssl rand -base64 32` (or similar) and paste into `.env`. Both services read the same env var, so changing it updates both at once. |
 | `LAVALINK_HOST` | no | `lavalink` | Set automatically by `compose.yaml`. Override only when running ryzic outside compose. |
 | `LAVALINK_PORT` | no | `2333` | |
 | `RYZIC_CACHE_DIR` | no | `/var/cache/ryzic` (compose) / `./.cache` (local) | Audio + playlist cache directory. **Both services must mount the same path.** |

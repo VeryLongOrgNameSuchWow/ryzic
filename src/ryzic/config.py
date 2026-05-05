@@ -143,7 +143,7 @@ def load() -> Config:
         discord_bot_token=_require("DISCORD_BOT_TOKEN"),
         lavalink_host=os.environ.get("LAVALINK_HOST", "lavalink"),
         lavalink_port=_parse_positive_int("LAVALINK_PORT", 2333),
-        lavalink_password=os.environ.get("LAVALINK_PASSWORD", "youshallnotpass"),
+        lavalink_password=_require("LAVALINK_PASSWORD"),
         cache_dir=Path(os.environ.get("RYZIC_CACHE_DIR", "./.cache")),
         cache_max_gb=_parse_positive_int("RYZIC_CACHE_MAX_GB", 5),
         log_level=_parse_log_level(os.environ.get("RYZIC_LOG_LEVEL")),
