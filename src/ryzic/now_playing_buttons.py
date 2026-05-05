@@ -42,14 +42,19 @@ _DISPATCH = {
 
 
 class _InteractionUser:
-    """Minimal ``ctx.user`` stand-in for the adapter."""
+    """Minimal ``ctx.user`` stand-in for the adapter.
+
+    Only ``id`` is exposed — the four dispatch handlers (pause / resume
+    / skip / leave) read just the user id (``ensure_same_voice`` cares
+    about voice-state lookup; the slash bodies don't render a username
+    anywhere). Adding ``.username`` would be dead surface today.
+    """
 
     def __init__(self, interaction: hikari.ComponentInteraction) -> None:
         # ``user`` always exists on guild interactions; ``member.user`` is
         # equivalent and present on non-guild paths too. Prefer ``user``
         # for parity with lightbulb's resolution.
         self.id = int(interaction.user.id)
-        self.username = interaction.user.username
 
 
 class _InteractionLightbulbClient:
@@ -158,12 +163,19 @@ async def on_interaction(event: hikari.InteractionCreateEvent) -> None:
             return
         return
 
-    # After the handler ran, refresh the controller so the embed
-    # reflects the new state (paused state flipped, queue advanced,
-    # etc.). Lavalink TrackStart will already have refreshed for /skip,
-    # but pause/resume don't fire any lavalink event, so we drive it
-    # explicitly here.
-    await now_playing.refresh(bot, int(interaction.guild_id))
+    # NOTE: do NOT call ``now_playing.refresh`` here. The slash bodies
+    # already drive every state change to the embed:
+    # - PAUSE / RESUME: ``_handle_pause`` / ``_handle_resume`` end with
+    #   their own ``now_playing.refresh`` call.
+    # - SKIP: ``lavalink.TrackStartEvent`` fires when the next track
+    #   begins (sub-second on a healthy node) and triggers
+    #   ``upsert_for_track_start``. Empty-queue case lands on
+    #   ``QueueEndEvent`` → ``refresh`` → idle render.
+    # - STOP: ``_handle_leave`` calls ``now_playing.teardown`` which
+    #   pops the registry record; a follow-up refresh would no-op.
+    # An extra refresh here would double the per-click ``edit_message``
+    # REST traffic and halve the effective per-message rate-limit
+    # budget (Discord caps edits at 5 / 5s).
 
 
 def register_listener(bot: hikari.GatewayBot) -> None:

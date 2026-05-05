@@ -75,19 +75,22 @@ class _FakeBot:
         self._me = FakeUser(bot_user_id)
         self.cache = FakeCache(states or {})
         self.update_voice_state_calls: list[tuple[int, int | None]] = []
-        # ``rest`` is used by now_playing's edit/create — not by the
-        # button handler itself in these tests, but the post-handler
-        # ``now_playing.refresh`` will call it.
+        # Public lists let tests count REST traffic per click — see the
+        # "1 click = 1 edit" regression test below.
+        self.create_calls: list[dict[str, Any]] = []
+        self.edit_calls: list[dict[str, Any]] = []
         self.rest = MagicMock()
 
-        async def _create(*args: Any, **kwargs: Any) -> Any:
+        async def _create(channel_id: int, **kwargs: Any) -> Any:
+            self.create_calls.append({"channel_id": channel_id, **kwargs})
             m = MagicMock()
             m.id = 9000
             return m
 
-        async def _edit(*args: Any, **kwargs: Any) -> Any:
+        async def _edit(channel_id: int, message_id: int, **kwargs: Any) -> Any:
+            self.edit_calls.append({"channel_id": channel_id, "message_id": message_id, **kwargs})
             m = MagicMock()
-            m.id = 9000
+            m.id = message_id
             return m
 
         self.rest.create_message = _create
@@ -284,3 +287,85 @@ async def test_adapter_propagates_ephemeral_flag() -> None:
     response = interaction.responses[0]
     assert response["content"] == "Nothing is playing."
     assert response["flags"] == hikari.MessageFlag.EPHEMERAL
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit regression: 1 click = 1 edit (issue #90 reviewer must-fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_pause_click_produces_exactly_one_edit_message() -> None:
+    """One button press → at most one ``edit_message`` REST call.
+
+    Pinned because both ``_handle_pause`` (slash body) and the
+    interaction handler used to call ``now_playing.refresh`` after the
+    state change. The doubled refresh halved the effective per-message
+    edit-rate budget (Discord caps at 5 / 5s). The interaction handler
+    no longer post-refreshes; the slash body's own refresh is the
+    single source of truth for the embed update.
+    """
+    bot = _both_in_voice()
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="X")
+    lavalink_glue.last_play_channel[111] = 555
+    now_playing._controllers[111] = (555, 9000)
+    interaction = _make_interaction(custom_id=now_playing.BUTTON_PAUSE, message_id=9000)
+
+    await now_playing_buttons.on_interaction(_event(interaction, bot))
+
+    assert player.set_pause_calls == [True]
+    # The single ``edit_message`` call comes from ``_handle_pause`` →
+    # ``now_playing.refresh`` → ``_post_or_edit``. Adding any more
+    # refresh calls (post-handler in ``on_interaction`` or anywhere
+    # else) would fail this assertion.
+    assert len(bot.edit_calls) == 1
+    assert bot.edit_calls[0]["channel_id"] == 555
+    assert bot.edit_calls[0]["message_id"] == 9000
+
+
+async def test_resume_click_produces_exactly_one_edit_message() -> None:
+    """Same invariant for the resume path."""
+    bot = _both_in_voice()
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="X")
+    player.paused = True
+    lavalink_glue.last_play_channel[111] = 555
+    now_playing._controllers[111] = (555, 9000)
+    interaction = _make_interaction(custom_id=now_playing.BUTTON_RESUME, message_id=9000)
+
+    await now_playing_buttons.on_interaction(_event(interaction, bot))
+
+    assert player.set_pause_calls == [False]
+    assert len(bot.edit_calls) == 1
+
+
+async def test_skip_click_does_not_redundantly_edit_via_button_handler() -> None:
+    """SKIP relies on ``TrackStartEvent``/``QueueEndEvent`` for the embed
+    update — the button handler itself must NOT call refresh.
+
+    Tests run without a live lavalink client driving events, so any
+    edit observed here would be from the (now-removed) post-handler
+    ``now_playing.refresh`` in ``on_interaction``. ``_handle_skip``
+    itself does not refresh.
+    """
+    bot = _both_in_voice()
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="X")
+    player.queue = [make_track_with_info(title="Next", video_id="aaaaaaaaaaa")]
+    lavalink_glue.last_play_channel[111] = 555
+    now_playing._controllers[111] = (555, 9000)
+    interaction = _make_interaction(custom_id=now_playing.BUTTON_SKIP, message_id=9000)
+
+    await now_playing_buttons.on_interaction(_event(interaction, bot))
+
+    assert player.skip_calls == 1
+    assert bot.edit_calls == []

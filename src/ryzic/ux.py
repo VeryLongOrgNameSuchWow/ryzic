@@ -384,7 +384,12 @@ def build_now_playing_embed(
     progress = f"{format_duration(position_ms)} / {format_duration(track.duration_ms)}"
     embed = hikari.Embed(title=title, description=description)
     embed.add_field(name="Progress", value=progress, inline=True)
-    queue_label = "empty" if queue_length == 0 else f"{queue_length} track(s)"
+    if queue_length == 0:
+        queue_label = "empty"
+    elif queue_length == 1:
+        queue_label = "1 track"
+    else:
+        queue_label = f"{queue_length} tracks"
     embed.add_field(name="Up next", value=queue_label, inline=True)
     uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
     embed.set_footer(safe_truncate(f"by {uploader}", EMBED_FOOTER_MAX))
