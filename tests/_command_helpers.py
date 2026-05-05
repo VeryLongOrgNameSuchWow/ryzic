@@ -132,6 +132,7 @@ class FakePlayer:
         self.set_pause_calls: list[bool] = []
         self.skip_calls: int = 0
         self.stop_calls: int = 0
+        self.seek_calls: list[int] = []
 
     @property
     def is_playing(self) -> bool:
@@ -153,6 +154,10 @@ class FakePlayer:
     async def stop(self) -> None:
         self.stop_calls += 1
         self.current = None
+
+    async def seek(self, position_ms: int) -> None:
+        self.seek_calls.append(position_ms)
+        self.position = position_ms
 
 
 class FakePlayerManager:

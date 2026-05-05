@@ -142,6 +142,7 @@ def main() -> None:
             "ryzic.commands.pause",
             "ryzic.commands.resume",
             "ryzic.commands.leave",
+            "ryzic.commands.seek",
         )
         await client.start()
 

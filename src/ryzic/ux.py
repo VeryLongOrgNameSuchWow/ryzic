@@ -29,6 +29,7 @@ which is unhelpful for embeds.
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 import hikari
@@ -103,6 +104,58 @@ def format_duration(ms: int) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes}:{seconds:02d}"
+
+
+# ``H:MM:SS`` (3 groups) or ``M:SS`` (last 2 groups) absolute form.
+# Per-component bounds are enforced in :func:`parse_seek_position`.
+_SEEK_ABSOLUTE_RE: Final = re.compile(r"^(?:(\d+):)?(\d+):(\d{1,2})$|^(\d+):(\d{2})$")
+# ``+30`` / ``-15`` relative form, seconds only. The leading sign is
+# REQUIRED — a bare integer like ``30`` is treated as ``0:30`` absolute.
+_SEEK_RELATIVE_RE: Final = re.compile(r"^([+-])(\d+)$")
+
+
+def parse_seek_position(raw: str) -> tuple[bool, int] | None:
+    """Parse a ``/seek`` argument into ``(is_relative, value_ms)``.
+
+    Accepts:
+
+    * Absolute ``M:SS`` or ``H:MM:SS`` (one or two colons).
+    * Relative ``+N`` / ``-N`` (seconds, sign required).
+    * Bare integer ``N`` — treated as absolute seconds (i.e. ``0:N``).
+
+    Returns ``None`` for unparseable input. ``value_ms`` is the absolute
+    target (when ``is_relative`` is False) or the signed delta in
+    milliseconds (when ``is_relative`` is True). The caller clamps to
+    ``[0, current.duration_ms]``.
+
+    Pure: no side effects, no Lavalink calls, ready for unit tests.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    rel = _SEEK_RELATIVE_RE.match(raw)
+    if rel is not None:
+        sign, digits = rel.groups()
+        seconds = int(digits)
+        return True, (-seconds if sign == "-" else seconds) * 1000
+    abs_match = _SEEK_ABSOLUTE_RE.match(raw)
+    if abs_match is not None:
+        # Two regex branches: ``H:MM:SS`` (groups 1-3) or ``M:SS`` (groups 4-5).
+        groups = abs_match.groups()
+        if groups[0] is not None or groups[1] is not None:
+            hours = int(groups[0] or 0)
+            minutes = int(groups[1])
+            seconds = int(groups[2])
+        else:
+            hours = 0
+            minutes = int(groups[3])
+            seconds = int(groups[4])
+        if seconds >= 60:
+            return None
+        return False, ((hours * 3600) + (minutes * 60) + seconds) * 1000
+    if raw.isdigit():
+        return False, int(raw) * 1000
+    return None
 
 
 def build_queued_track_embed(

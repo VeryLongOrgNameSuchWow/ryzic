@@ -110,6 +110,58 @@ def test_format_duration_clamps_negative() -> None:
 
 
 # ---------------------------------------------------------------------------
+# parse_seek_position
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("0:00", (False, 0)),
+        ("1:30", (False, 90_000)),
+        ("12:34", (False, 754_000)),
+        ("0:09", (False, 9_000)),
+        ("1:02:05", (False, 3_725_000)),
+        ("0:00:30", (False, 30_000)),
+        ("30", (False, 30_000)),
+        ("0", (False, 0)),
+        ("+30", (True, 30_000)),
+        ("-15", (True, -15_000)),
+        ("+0", (True, 0)),
+        ("-0", (True, 0)),
+        ("  1:30  ", (False, 90_000)),
+    ],
+)
+def test_parse_seek_position_accepts_valid(raw: str, expected: tuple[bool, int]) -> None:
+    assert ux.parse_seek_position(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        " ",
+        "abc",
+        "1:60",  # seconds field >= 60
+        "1:99",  # seconds field >= 60
+        ":30",  # missing leading minutes
+        "1:",  # missing seconds
+        "+",  # sign without digits
+        "-",  # sign without digits
+        "+1:30",  # signed colon-form not supported
+        "1.30",  # dot, not colon
+        "1m30s",  # not the parser's grammar
+        "30s",
+        "--5",
+        "+-5",
+        "1:2:3:4",  # too many colons
+    ],
+)
+def test_parse_seek_position_rejects_invalid(raw: str) -> None:
+    assert ux.parse_seek_position(raw) is None
+
+
+# ---------------------------------------------------------------------------
 # build_queued_track_embed
 # ---------------------------------------------------------------------------
 
