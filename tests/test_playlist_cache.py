@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import time_machine
 
 from ryzic import playlist_cache
 from ryzic.errors import FetchFailed, InvalidVideoID
@@ -79,7 +80,7 @@ async def test_read_structurally_invalid_returns_none(tmp_path: Path) -> None:
 
 
 async def test_read_missing_fetched_at_returns_none(tmp_path: Path) -> None:
-    # ``fetched_at`` lives outside the dataclass; without it the file is
+    # ``fetched_at`` lives outside ``PlaylistInfo``; without it the file is
     # an unusable cache entry (no way to compute staleness).
     path = tmp_path / "playlists" / f"{PLIST_ID}.json"
     path.parent.mkdir(parents=True)
@@ -215,7 +216,7 @@ async def test_extract_playlist_id_picks_first_when_list_param_repeats() -> None
 )
 def test_is_stale_boundary(offset_seconds: int, expected_stale: bool) -> None:
     now = 1_700_000_000
-    with patch.object(playlist_cache.time, "time", return_value=now):
+    with time_machine.travel(now, tick=False):
         assert playlist_cache.is_stale(now - offset_seconds) is expected_stale
 
 

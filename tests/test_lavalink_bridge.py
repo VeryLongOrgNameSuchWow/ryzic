@@ -17,6 +17,7 @@ from typing import Any, cast
 import hikari
 import lavalink
 import pytest
+from dirty_equals import IsPartialDict
 
 from ryzic import config, lavalink_glue
 from tests._command_helpers import RecordingCache
@@ -142,9 +143,11 @@ def test_bridge_voice_server_payload_strips_wss_scheme() -> None:
     event = _make_voice_server_event(endpoint="wss://us-east1234.discord.media:443")
     payload = lavalink_glue._bridge_voice_server_payload(event)
     assert payload["t"] == "VOICE_SERVER_UPDATE"
-    assert payload["d"]["endpoint"] == "us-east1234.discord.media:443"
-    assert payload["d"]["guild_id"] == "111"
-    assert payload["d"]["token"] == "tok"
+    assert payload["d"] == IsPartialDict(
+        endpoint="us-east1234.discord.media:443",
+        guild_id="111",
+        token="tok",
+    )
 
 
 def test_bridge_voice_server_payload_handles_none_endpoint() -> None:
@@ -214,8 +217,10 @@ async def test_voice_server_listener_forwards_when_client_present() -> None:
     assert len(fake_client.payloads) == 1
     payload = fake_client.payloads[0]
     assert payload["t"] == "VOICE_SERVER_UPDATE"
-    assert payload["d"]["guild_id"] == "111"
-    assert payload["d"]["endpoint"] == "us-east1234.discord.media:443"
+    assert payload["d"] == IsPartialDict(
+        guild_id="111",
+        endpoint="us-east1234.discord.media:443",
+    )
 
 
 async def test_voice_server_listener_drops_non_discord_endpoint() -> None:
@@ -249,10 +254,12 @@ async def test_voice_state_listener_forwards_payload() -> None:
     assert len(fake_client.payloads) == 1
     payload = fake_client.payloads[0]
     assert payload["t"] == "VOICE_STATE_UPDATE"
-    assert payload["d"]["guild_id"] == "111"
-    assert payload["d"]["user_id"] == "222"
-    assert payload["d"]["channel_id"] == "333"
-    assert payload["d"]["session_id"] == "sess"
+    assert payload["d"] == IsPartialDict(
+        guild_id="111",
+        user_id="222",
+        channel_id="333",
+        session_id="sess",
+    )
 
 
 async def test_voice_state_listener_sets_voice_ready_event_for_bot_user() -> None:
