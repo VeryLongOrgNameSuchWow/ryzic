@@ -74,35 +74,41 @@ jobs:
           fi
           # release-please-action runs against the API, so we have no working
           # tree at this point — materialize the release-PR branch into a
-          # scratch dir to read its manifest and apply the pin. We use the
-          # ``actions/checkout``-style ``git init`` + ``git config
-          # http.<server>/.extraheader`` + ``git fetch`` + ``git checkout``
-          # pattern rather than ``git clone -c http.<URL>.extraheader=...``
-          # because ``git -c`` on the clone empirically failed to authenticate
-          # (v0.5.1's partial fix #123 hit this; the clone fell back to
-          # interactive prompting and failed with "could not read Username").
-          # The local-config form via ``git init`` + ``git config`` works
-          # reliably and is what ``actions/checkout`` itself uses internally
-          # (see actions/checkout ``src/git-auth-helper.ts``: same
-          # ``http.${serverUrl.origin}/.extraheader`` key shape). Storing the
-          # token in the workdir's ``.git/config`` is acceptable: the workdir
-          # is ``mktemp -d`` and is discarded with the runner; the token is
-          # never written to any path that survives the workflow run.
+          # scratch dir to read its manifest and apply the pin.
           #
-          # The ``http.<server>/.extraheader`` key is URL-scoped — git's
-          # URL-prefix matching limits the override to requests starting with
-          # ``${SERVER}/`` (i.e. ``https://github.com/``), so the token does
-          # not leak to unrelated HTTP remotes a future contributor might add
-          # in the same workdir. Belt-and-braces: still don't add ``git
-          # fetch <other-github-url>`` / ``git submodule update`` here, since
-          # those would still target ``${SERVER}`` and receive the header.
+          # AUTH HISTORY: three prior iterations on the http.extraheader
+          # pattern failed end-to-end with "could not read Username for
+          # 'https://github.com'":
+          #   - #123 (v0.5.1): command-line ``-c http.<URL>.extraheader=...``.
+          #   - #125 (v0.5.2): local-config ``git init`` + ``git config
+          #     http.extraheader=...``.
+          #   - #125 fold-in: URL-scoped local-config form
+          #     ``http.${SERVER}/.extraheader``, mirroring
+          #     ``actions/checkout``'s exact key shape.
+          # The actions/checkout source we mirrored does additional setup
+          # beyond extraheader (placeholder username + credential-helper
+          # override) that we never replicated; the exact gap is unidentified.
+          # v0.5.3 abandons the extraheader approach and embeds the App
+          # token directly in the clone URL (the simpler, bulletproof form).
+          #
+          # SECURITY TRADEOFF: the token IS persisted in the workdir's
+          # ``.git/config`` as part of the ``origin`` URL. Acceptable here
+          # because (a) the workdir is ``mktemp -d``, lands in /tmp on the
+          # GHA-hosted ephemeral VM, and is discarded when the runner exits;
+          # (b) ``ubuntu-latest`` is single-tenant — no other process can
+          # read the workdir during the run; (c) the App-installation token
+          # has a 1-hour TTL, capping any leak's blast radius; (d) the
+          # token also appears in the cmdline of ``git clone`` and its
+          # ``git-remote-https`` subprocesses for the duration of the clone
+          # — on the single-tenant runner per (b) this is null exposure,
+          # but if this pattern is ever lifted to a multi-tenant runner the
+          # cmdline surface escalates alongside the on-disk surface. The
+          # ``git push`` later in this script reuses ``origin`` (which
+          # carries the token), so no additional auth flag is needed there.
           workdir=$(mktemp -d)
+          remote_with_token="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          git clone --depth=1 --branch "$branch" "$remote_with_token" "$workdir"
           cd "$workdir"
-          git init -q
-          git remote add origin "${SERVER}/${REPO}.git"
-          git config "http.${SERVER}/.extraheader" "AUTHORIZATION: bearer ${GH_TOKEN}"
-          git fetch --depth=1 origin "$branch"
-          git checkout -q "$branch"
           version=$(jq -r '."."' .release-please-manifest.json)
           # Strict semver-shape check; bail loudly on anything else so a
           # surprise manifest format doesn't silently produce a bad pin.
@@ -127,5 +133,6 @@ jobs:
           git config user.email '281041686+vlonsw-release-please[bot]@users.noreply.github.com'
           git add compose.yaml
           git commit -m "chore(release): pin compose.yaml image to :${target}"
-          # Local-config http.extraheader (set above) applies to push too.
+          # ``origin`` URL embeds the token (see clone above), so push
+          # authenticates without any additional config.
           git push origin "$branch"
