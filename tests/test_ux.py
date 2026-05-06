@@ -167,6 +167,71 @@ def test_parse_seek_position_rejects_invalid(raw: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# format_now_playing_line + build_simple_now_playing_embed
+# ---------------------------------------------------------------------------
+
+
+def test_format_now_playing_line_shape() -> None:
+    line = ux.format_now_playing_line(
+        _track(title="Song", url="https://youtu.be/x", duration_ms=180_000),
+        position_ms=60_000,
+        paused=False,
+    )
+    assert line == "[**Song**](https://youtu.be/x) — 1:00 / 3:00"
+
+
+def test_format_now_playing_line_appends_paused() -> None:
+    line = ux.format_now_playing_line(
+        _track(title="Song", duration_ms=180_000),
+        position_ms=60_000,
+        paused=True,
+    )
+    assert line.endswith(" — 1:00 / 3:00 (paused)")
+
+
+def test_format_now_playing_line_escapes_markdown() -> None:
+    line = ux.format_now_playing_line(
+        _track(title="**hostile**", duration_ms=180_000),
+        position_ms=0,
+        paused=False,
+    )
+    assert "\\*\\*hostile\\*\\*" in line
+
+
+def test_build_simple_now_playing_embed_includes_title_link_and_progress() -> None:
+    embed = ux.build_simple_now_playing_embed(
+        _track(title="Song", url="https://youtu.be/x", duration_ms=180_000),
+        position_ms=30_000,
+        paused=False,
+    )
+    assert embed.title == "Now playing"
+    body = embed.description or ""
+    assert "[**Song**](https://youtu.be/x)" in body
+    assert "0:30 / 3:00" in body
+    assert "(paused)" not in body
+
+
+def test_build_simple_now_playing_embed_paused_indicator() -> None:
+    embed = ux.build_simple_now_playing_embed(
+        _track(title="Song", duration_ms=180_000),
+        position_ms=30_000,
+        paused=True,
+    )
+    body = embed.description or ""
+    assert "(paused)" in body
+
+
+def test_build_simple_now_playing_embed_footer_carries_uploader() -> None:
+    embed = ux.build_simple_now_playing_embed(
+        _track(title="Song", uploader="Some Channel"),
+        position_ms=0,
+        paused=False,
+    )
+    assert embed.footer is not None
+    assert "Some Channel" in (embed.footer.text or "")
+
+
+# ---------------------------------------------------------------------------
 # build_queued_track_embed
 # ---------------------------------------------------------------------------
 
