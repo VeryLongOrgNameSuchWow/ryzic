@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.1...v0.5.2) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ci:** use local extraheader config instead of -c for compose-pin-auto clone ([#125](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/125)) ([46f8ef6](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/46f8ef639c2817fdf0ff6155dc46bb9148b64225))
+
 ## [0.5.1](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.0...v0.5.1) (2026-05-06)
 
 
