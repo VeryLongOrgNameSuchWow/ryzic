@@ -334,6 +334,10 @@ class EventHandler:
         guild_id = event.player.guild_id
         _cancel_auto_leave(guild_id)
         _log.info("guild=%d track-start title=%r", guild_id, _track_title(event.track))
+        # Lazy-import sidesteps the ``now_playing → lavalink_glue`` cycle.
+        from . import now_playing
+
+        await now_playing.upsert_for_track_start(self._bot, guild_id)
 
     @lavalink.listener(lavalink.TrackEndEvent)
     async def on_track_end(self, event: lavalink.TrackEndEvent) -> None:
@@ -410,6 +414,9 @@ class EventHandler:
                 _auto_leave_seconds,
             )
         _start_auto_leave(self._bot, guild_id)
+        from . import now_playing
+
+        await now_playing.refresh(self._bot, guild_id)
 
     @lavalink.listener(lavalink.WebSocketClosedEvent)
     async def on_websocket_closed(self, event: lavalink.WebSocketClosedEvent) -> None:
@@ -431,6 +438,9 @@ class EventHandler:
         await _send_to_last_play_channel(
             self._bot, guild_id, "Voice connection lost. Queue cleared."
         )
+        from . import now_playing
+
+        await now_playing.teardown(self._bot, guild_id)
 
     @lavalink.listener(lavalink.NodeDisconnectedEvent)
     async def on_node_disconnected(self, event: lavalink.NodeDisconnectedEvent) -> None:
@@ -443,12 +453,15 @@ class EventHandler:
         client = _ll_client
         if client is None:
             return
+        from . import now_playing
+
         notified: set[int] = set()
         for player in list(client.player_manager.values()):
             guild_id = player.guild_id
             await clear_queue_releasing(cast(lavalink.DefaultPlayer, player))
             _cancel_auto_leave(guild_id)
             _reset_voice_ready(guild_id)
+            await now_playing.teardown(self._bot, guild_id)
             if guild_id in notified:
                 continue
             notified.add(guild_id)
@@ -554,6 +567,12 @@ async def _on_guild_leave(event: hikari.GuildLeaveEvent) -> None:
     _cancel_auto_leave(guild_id)
     last_play_channel.pop(guild_id, None)
     _voice_ready_events.pop(guild_id, None)
+    from . import now_playing
+
+    # No REST teardown — the bot has just lost its messages-write
+    # permission to the guild, so an edit would 403. Drop the local
+    # record so we don't try again later.
+    now_playing._controllers.pop(guild_id, None)
     client = _ll_client
     if client is not None:
         try:

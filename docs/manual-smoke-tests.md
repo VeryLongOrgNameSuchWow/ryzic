@@ -40,6 +40,15 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 - [ ] After more than 25 tracks have played, `/recent` caps the list at 25 entries (oldest fall off).
 - [ ] After `docker compose restart ryzic`, `/recent` reports empty — history is in-memory only by design.
 
+## Now-playing controller
+
+- [ ] First `/play` posts a "Now playing" embed in that text channel with three buttons: ⏸ Pause · ⏭ Skip · ⏹ Stop.
+- [ ] Pressing ⏸ Pause swaps the embed title to "Paused" and replaces the button with ▶ Resume; press it again to flip back.
+- [ ] Pressing ⏭ Skip advances to the next track and the embed updates to the new track title; clicking ⏹ Stop disconnects + clears the queue, and the embed switches to "Idle" with all three buttons disabled.
+- [ ] Voice gating: a user NOT in the bot's voice channel clicking any button gets an ephemeral "Join <channel>" message; the player state is unchanged.
+- [ ] Stale-embed click after `docker compose restart ryzic` returns an ephemeral "previous session" message; the embed left in the channel does NOT mutate state.
+- [ ] A second `/play` in a different text channel posts a fresh controller in the new channel; the prior embed in the old channel is left as a history marker (not deleted) and stops receiving updates.
+
 ## Auto-leave
 
 - [ ] After the final track in a queue ends, the bot stays connected briefly, then disconnects after ~5 minutes of idle and posts `Idle for 5 minutes — disconnecting.` in the channel where `/play` was last used.

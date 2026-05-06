@@ -9,7 +9,7 @@ import dotenv
 import hikari
 import lightbulb
 
-from . import audio_cache, config, lavalink_glue, ytdlp
+from . import audio_cache, config, lavalink_glue, now_playing_buttons, ytdlp
 
 _log = logging.getLogger(__name__)
 
@@ -124,6 +124,7 @@ def main() -> None:
     )
     client = _build_client(bot, cfg)
     lavalink_glue.register_listeners(bot, cfg)
+    now_playing_buttons.register_listener(bot)
 
     cache: audio_cache.AudioCache | None = None
 

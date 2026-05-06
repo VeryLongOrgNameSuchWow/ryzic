@@ -369,3 +369,29 @@ def test_recent_embed_escapes_markdown_in_titles() -> None:
     assert "**evil**" not in embed.description
     assert "\\*\\*evil\\*\\*" in embed.description
     assert "\\[link\\]" in embed.description
+
+
+# ---------------------------------------------------------------------------
+# build_now_playing_embed (issue #90)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("queue_length", "expected_label"),
+    [
+        (0, "empty"),
+        (1, "1 track"),
+        (2, "2 tracks"),
+        (10, "10 tracks"),
+    ],
+)
+def test_now_playing_embed_pluralizes_up_next_label(queue_length: int, expected_label: str) -> None:
+    """The Up next field renders ``empty`` / ``N track`` / ``N tracks``."""
+    embed = ux.build_now_playing_embed(
+        _track(),
+        position_ms=0,
+        paused=False,
+        queue_length=queue_length,
+    )
+    up_next_field = next(f for f in embed.fields if f.name == "Up next")
+    assert up_next_field.value == expected_label

@@ -373,3 +373,48 @@ def build_recent_embed(history: list[TrackInfo]) -> hikari.Embed:
     embed = hikari.Embed(title=f"Recently played ({len(history)})", description=description)
     embed.set_footer("Use /replay <position> to re-queue.")
     return embed
+
+
+def build_now_playing_embed(
+    track: TrackInfo,
+    *,
+    position_ms: int,
+    paused: bool,
+    queue_length: int,
+) -> hikari.Embed:
+    """Build the persistent now-playing controller embed (issue #90).
+
+    Distinct from :func:`build_queue_embed` to keep the controller
+    surface visually narrow — it shows just current track + progress +
+    queue depth, not the full queue listing. Title swaps to "Paused"
+    when the player is paused so the embed matches the button state.
+    """
+    title = "Paused" if paused else "Now playing"
+    safe_title = safe_truncate(escape_markdown(track.title), EMBED_DESCRIPTION_MAX // 2)
+    description = safe_truncate(f"[**{safe_title}**]({track.url})", EMBED_DESCRIPTION_MAX)
+    progress = f"{format_duration(position_ms)} / {format_duration(track.duration_ms)}"
+    embed = hikari.Embed(title=title, description=description)
+    embed.add_field(name="Progress", value=progress, inline=True)
+    if queue_length == 0:
+        queue_label = "empty"
+    elif queue_length == 1:
+        queue_label = "1 track"
+    else:
+        queue_label = f"{queue_length} tracks"
+    embed.add_field(name="Up next", value=queue_label, inline=True)
+    uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
+    embed.set_footer(safe_truncate(f"by {uploader}", EMBED_FOOTER_MAX))
+    return embed
+
+
+def build_now_playing_idle_embed() -> hikari.Embed:
+    """Build the post-queue idle embed for the now-playing controller (issue #90).
+
+    Used after ``QueueEndEvent`` and ``/leave`` so the controller stops
+    advertising stale playback state. Buttons are rendered disabled by
+    the caller to reinforce the inactive state.
+    """
+    return hikari.Embed(
+        title="Idle",
+        description="No tracks playing. Use /play to queue something.",
+    )
