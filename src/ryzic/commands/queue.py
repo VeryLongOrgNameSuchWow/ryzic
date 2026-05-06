@@ -1,13 +1,17 @@
-"""``/queue`` slash command (M1 §3, optional ``private`` flag per issue #100).
+"""``/queue`` slash command (M1 §3, paging #99 + ``private`` flag #100).
 
-Renders the now-playing track plus the upcoming queue. No voice
-precondition — queue introspection is read-only and useful from any
-text channel in the guild.
+Renders the now-playing track plus the upcoming queue. Two optional
+arguments:
 
-The ``private`` argument (issue #100) routes the success embed to an
-ephemeral response so the invoker can check the queue without spamming
-a busy text channel. Empty/error paths are ephemeral regardless —
-failure responses don't pollute the channel either way.
+- ``page`` (issue #99) slices into the queue at offset
+  ``(page-1) * QUEUE_PAGE_SIZE``; default 1 (the next-up tracks).
+- ``private`` (issue #100) routes the success embed to an ephemeral
+  response so the invoker can check the queue without spamming a busy
+  text channel. Empty/error paths are ephemeral regardless — failure
+  responses don't pollute the channel either way.
+
+No voice precondition — queue introspection is read-only and useful
+from any text channel in the guild.
 """
 
 from __future__ import annotations
@@ -30,6 +34,12 @@ class Queue(
     description="Show the current track and upcoming queue.",
     contexts=[hikari.ApplicationContextType.GUILD],
 ):
+    page = lightbulb.integer(
+        "page",
+        "Page number (10 tracks per page; 1 = next up).",
+        default=1,
+        min_value=1,
+    )
     private = lightbulb.boolean(
         "private",
         "Only you see the response (default: False — public).",
@@ -38,10 +48,10 @@ class Queue(
 
     @lightbulb.invoke
     async def invoke(self, ctx: lightbulb.Context) -> None:
-        await _handle_queue(ctx, private=self.private)
+        await _handle_queue(ctx, page=self.page, private=self.private)
 
 
-async def _handle_queue(ctx: lightbulb.Context, *, private: bool = False) -> None:
+async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool = False) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
         await ctx.respond("Run /queue in a server.", ephemeral=True)
@@ -75,10 +85,25 @@ async def _handle_queue(ctx: lightbulb.Context, *, private: bool = False) -> Non
             continue
         queue_entries.append((info, int(queued.requester)))
 
+    # ``min_value=1`` already enforces page ≥ 1 at the slash layer; we
+    # only need to bound the upper end here. ``max(1, ...)`` keeps the
+    # empty-queue case (0 entries → 0 pages naturally) from producing a
+    # nonsense ``page > 0`` ephemeral when the user passes the default.
+    total_pages = max(1, (len(queue_entries) + ux.QUEUE_PAGE_SIZE - 1) // ux.QUEUE_PAGE_SIZE)
+    if page > total_pages:
+        plural = "" if total_pages == 1 else "s"
+        await ctx.respond(
+            f"Queue has only {total_pages} page{plural}.",
+            ephemeral=True,
+        )
+        return
+
     embed = ux.build_queue_embed(
         now_playing=now_playing_info,
         now_playing_position_ms=player.position,
         paused=player.paused,
         queue=queue_entries,
+        page=page,
+        total_pages=total_pages,
     )
     await ctx.respond(embed=embed, ephemeral=private)
