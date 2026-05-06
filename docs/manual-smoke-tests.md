@@ -26,6 +26,7 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 - [ ] `/queue page:99` on a small queue returns an ephemeral "Queue has only N page(s)." with correct pluralization (1 → "page"; 2+ → "pages").
 - [ ] `/queue private:True` shows the same embed but only to the invoker (ephemeral); other users in the channel don't see it.
 - [ ] `/queue page:2 private:True` composes — page 2 rendered ephemerally to invoker only.
+- [ ] `/np private:True` shows the now-playing embed but only to the invoker (ephemeral).
 - [ ] `/skip` advances to the next track immediately; the embed names the skipped title.
 - [ ] `/pause` halts playback; `/resume` resumes from the same position (no audible jump).
 - [ ] `/leave` disconnects the bot and clears the queue; `/queue` afterwards reports empty.
