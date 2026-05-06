@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.4.0...v0.5.0) (2026-05-06)
+
+
+### Features
+
+* add /seek &lt;m:ss|+30|-15&gt; ([#114](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/114)) ([fa7452f](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/fa7452f359245ec659485dc5bb11bc3d782d8031))
+* add optional private flag to /np for ephemeral responses ([#122](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/122)) ([f925aa6](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/f925aa61594ee7df9ca0227018e6cc3f2ba95a62))
+* add optional private flag to /queue for ephemeral responses ([#120](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/120)) ([5e33b4f](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/5e33b4fc3834ca6246f8ebdcafe6532cd2c83920))
+* add page argument to /queue for browsing past the first 10 tracks ([#119](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/119)) ([7935db8](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/7935db8b22e9b4b0448963eb955b5ee02f2487b5))
+* in-memory track history with /recent and /replay ([#116](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/116)) ([5d03b2a](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/5d03b2aeea9dde09b4d90779c295db17689a5cb2))
+* persistent now-playing controller embed with media-remote buttons ([#118](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/118)) ([b2b822b](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/b2b822b81655439a4fe7fcc195af6842d7cd02f7))
+* split /np from /queue with shared now-playing helper ([#115](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/115)) ([a5652da](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/a5652da469c3a4efd607992526ae8285f0e59331))
+
 ## [0.4.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.3.0...v0.4.0) (2026-05-05)
 
 
