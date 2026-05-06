@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.0...v0.5.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ci:** correct extraheader URL key + remove false-on-refresh conditional in compose-pin-auto ([#123](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/123)) ([66aaedd](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/66aaedd560d4da3ee900741c5896f1512c17bdc0))
+
 ## [0.5.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.4.0...v0.5.0) (2026-05-06)
 
 
