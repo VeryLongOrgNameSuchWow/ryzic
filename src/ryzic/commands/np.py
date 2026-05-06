@@ -1,4 +1,11 @@
-"""``/np`` slash command: show the currently-playing track."""
+"""``/np`` slash command: show the currently-playing track.
+
+Mirrors ``/queue``'s ``private`` flag (issue #100): ``private=True`` routes
+the success embed to an ephemeral response so the invoker can check the
+current track without spamming a busy channel. Empty/error paths stay
+ephemeral regardless — failure messages don't pollute the channel
+either way.
+"""
 
 from __future__ import annotations
 
@@ -22,12 +29,18 @@ class NowPlaying(
     description="Show the currently-playing track.",
     contexts=[hikari.ApplicationContextType.GUILD],
 ):
+    private = lightbulb.boolean(
+        "private",
+        "Only you see the response (default: False — public).",
+        default=False,
+    )
+
     @lightbulb.invoke
     async def invoke(self, ctx: lightbulb.Context) -> None:
-        await _handle_np(ctx)
+        await _handle_np(ctx, private=self.private)
 
 
-async def _handle_np(ctx: lightbulb.Context) -> None:
+async def _handle_np(ctx: lightbulb.Context, *, private: bool = False) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
         await ctx.respond("Run /np in a server.", ephemeral=True)
@@ -49,4 +62,4 @@ async def _handle_np(ctx: lightbulb.Context) -> None:
         return
 
     embed = ux.build_simple_now_playing_embed(info, int(player.position), paused=player.paused)
-    await ctx.respond(embed=embed)
+    await ctx.respond(embed=embed, ephemeral=private)
