@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.2...v0.5.3) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ci:** switch to URL-with-token form for compose-pin-auto clone ([#130](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/130)) ([f96e312](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/f96e3124b0ba02a8710153d442a7f9e69fc87165))
+
 ## [0.5.2](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.1...v0.5.2) (2026-05-06)
 
 
