@@ -167,7 +167,7 @@ def test_parse_seek_position_rejects_invalid(raw: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# format_now_playing_line + build_now_playing_embed
+# format_now_playing_line + build_simple_now_playing_embed
 # ---------------------------------------------------------------------------
 
 
@@ -198,8 +198,8 @@ def test_format_now_playing_line_escapes_markdown() -> None:
     assert "\\*\\*hostile\\*\\*" in line
 
 
-def test_build_now_playing_embed_includes_title_link_and_progress() -> None:
-    embed = ux.build_now_playing_embed(
+def test_build_simple_now_playing_embed_includes_title_link_and_progress() -> None:
+    embed = ux.build_simple_now_playing_embed(
         _track(title="Song", url="https://youtu.be/x", duration_ms=180_000),
         position_ms=30_000,
         paused=False,
@@ -211,8 +211,8 @@ def test_build_now_playing_embed_includes_title_link_and_progress() -> None:
     assert "(paused)" not in body
 
 
-def test_build_now_playing_embed_paused_indicator() -> None:
-    embed = ux.build_now_playing_embed(
+def test_build_simple_now_playing_embed_paused_indicator() -> None:
+    embed = ux.build_simple_now_playing_embed(
         _track(title="Song", duration_ms=180_000),
         position_ms=30_000,
         paused=True,
@@ -221,8 +221,8 @@ def test_build_now_playing_embed_paused_indicator() -> None:
     assert "(paused)" in body
 
 
-def test_build_now_playing_embed_footer_carries_uploader() -> None:
-    embed = ux.build_now_playing_embed(
+def test_build_simple_now_playing_embed_footer_carries_uploader() -> None:
+    embed = ux.build_simple_now_playing_embed(
         _track(title="Song", uploader="Some Channel"),
         position_ms=0,
         paused=False,

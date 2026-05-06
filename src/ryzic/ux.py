@@ -302,7 +302,7 @@ def format_now_playing_line(
     return f"[**{title}**]({track.url}) — {progress}"
 
 
-def build_now_playing_embed(
+def build_simple_now_playing_embed(
     track: TrackInfo,
     position_ms: int,
     *,
@@ -310,9 +310,11 @@ def build_now_playing_embed(
 ) -> hikari.Embed:
     """Build the ``/np`` embed for the currently-playing track.
 
-    Single source of truth for "now playing" rendering — also consumed
-    by the persistent controller embed (#4) so both surfaces stay in
-    visual lock-step.
+    Coexists with :func:`build_now_playing_embed` (the persistent
+    controller surface added in #90/#118): each command renders its own
+    embed today. Unifying both around :func:`format_now_playing_line`
+    so the controller and ``/np`` stay visually aligned is tracked as
+    a follow-up; for now they diverge by design.
     """
     raw_line = format_now_playing_line(track, position_ms, paused=paused)
     line = safe_truncate(raw_line, EMBED_DESCRIPTION_MAX)

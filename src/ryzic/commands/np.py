@@ -48,5 +48,5 @@ async def _handle_np(ctx: lightbulb.Context) -> None:
         await ctx.respond(_NOTHING_PLAYING, ephemeral=True)
         return
 
-    embed = ux.build_now_playing_embed(info, int(player.position), paused=player.paused)
+    embed = ux.build_simple_now_playing_embed(info, int(player.position), paused=player.paused)
     await ctx.respond(embed=embed)
