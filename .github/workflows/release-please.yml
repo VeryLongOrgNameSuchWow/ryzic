@@ -52,14 +52,14 @@ jobs:
       # see the diff before merging the release PR.
       - name: Pin compose.yaml image tag to release major.minor
         # NOTE (2026-05-06): no ``if:`` conditional. ``release-please-action``
-        # only sets ``prs_created=true`` on the FIRST workflow invocation that
-        # opens the release PR; every subsequent push that refreshes the PR
-        # leaves ``prs_created=false`` and skipped this step entirely (which
-        # is why neither v0.4.0 nor v0.5.0 had compose.yaml auto-bumped — the
-        # bump only landed if the very first run cut the release). The
-        # in-script ``if [ -z "$branch" ]; then exit 0; fi`` already
-        # short-circuits non-release pushes idempotently, so the conditional
-        # was always belt-and-suspenders.
+        # sets ``prs_created=true`` whenever it OPENS or MATERIALLY UPDATES
+        # the release PR; runs that find the existing PR body unchanged set
+        # ``prs_created=false``. Combined with the prior bug A (clone-time
+        # auth failure on every run that fired), this is why neither v0.4.0
+        # nor v0.5.0 had compose.yaml auto-bumped. The in-script
+        # ``if [ -z "$branch" ]; then exit 0; fi`` already short-circuits
+        # non-release pushes idempotently, so the conditional was always
+        # belt-and-suspenders.
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PRS_JSON: ${{ steps.release-please.outputs.prs }}
@@ -73,19 +73,36 @@ jobs:
             exit 0
           fi
           # release-please-action runs against the API, so we have no working
-          # tree at this point — clone the release-PR branch into a scratch
-          # dir to read its manifest and apply the pin. Auth lives in an
-          # http.extraheader override (kept off-disk) rather than embedded in
-          # the remote URL, so .git/config never persists the token. The
-          # config key uses host-level scope (``http.<server>/.extraheader``,
-          # 2026-05-06 fix); the prior full-URL form
-          # ``http.<server>/<repo>.git.extraheader`` did not match git's URL
-          # prefix lookup and the clone failed with "could not read Username".
+          # tree at this point — materialize the release-PR branch into a
+          # scratch dir to read its manifest and apply the pin. We use the
+          # ``actions/checkout``-style ``git init`` + ``git config
+          # http.<server>/.extraheader`` + ``git fetch`` + ``git checkout``
+          # pattern rather than ``git clone -c http.<URL>.extraheader=...``
+          # because ``git -c`` on the clone empirically failed to authenticate
+          # (v0.5.1's partial fix #123 hit this; the clone fell back to
+          # interactive prompting and failed with "could not read Username").
+          # The local-config form via ``git init`` + ``git config`` works
+          # reliably and is what ``actions/checkout`` itself uses internally
+          # (see actions/checkout ``src/git-auth-helper.ts``: same
+          # ``http.${serverUrl.origin}/.extraheader`` key shape). Storing the
+          # token in the workdir's ``.git/config`` is acceptable: the workdir
+          # is ``mktemp -d`` and is discarded with the runner; the token is
+          # never written to any path that survives the workflow run.
+          #
+          # The ``http.<server>/.extraheader`` key is URL-scoped — git's
+          # URL-prefix matching limits the override to requests starting with
+          # ``${SERVER}/`` (i.e. ``https://github.com/``), so the token does
+          # not leak to unrelated HTTP remotes a future contributor might add
+          # in the same workdir. Belt-and-braces: still don't add ``git
+          # fetch <other-github-url>`` / ``git submodule update`` here, since
+          # those would still target ``${SERVER}`` and receive the header.
           workdir=$(mktemp -d)
-          auth_header="AUTHORIZATION: bearer ${GH_TOKEN}"
-          git -c "http.${SERVER}/.extraheader=${auth_header}" \
-            clone --depth=1 --branch "$branch" "${SERVER}/${REPO}.git" "$workdir"
           cd "$workdir"
+          git init -q
+          git remote add origin "${SERVER}/${REPO}.git"
+          git config "http.${SERVER}/.extraheader" "AUTHORIZATION: bearer ${GH_TOKEN}"
+          git fetch --depth=1 origin "$branch"
+          git checkout -q "$branch"
           version=$(jq -r '."."' .release-please-manifest.json)
           # Strict semver-shape check; bail loudly on anything else so a
           # surprise manifest format doesn't silently produce a bad pin.
@@ -110,4 +127,5 @@ jobs:
           git config user.email '281041686+vlonsw-release-please[bot]@users.noreply.github.com'
           git add compose.yaml
           git commit -m "chore(release): pin compose.yaml image to :${target}"
-          git -c "http.${SERVER}/.extraheader=${auth_header}" push origin "$branch"
+          # Local-config http.extraheader (set above) applies to push too.
+          git push origin "$branch"
