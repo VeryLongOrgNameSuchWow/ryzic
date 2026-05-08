@@ -27,7 +27,7 @@ import lavalink
 import lightbulb
 import pytest
 
-from ryzic import audio_cache, lavalink_glue
+from ryzic import audio_cache, lavalink_glue, ytdlp
 from ryzic.commands import play as play_module
 from ryzic.errors import FetchFailed
 from ryzic.ytdlp import PlaylistInfo, TrackInfo
@@ -517,6 +517,45 @@ async def test_single_track_queue_full_rejects(cache: Any) -> None:
     assert bot.update_voice_state_calls == []
 
 
+async def test_cache_hit_queue_full_releases_pin(cache: Any) -> None:
+    """Cache-hit queue-full path must release the pin acquired by try_hit.
+
+    Otherwise the eviction-blocking pin from try_hit lingers indefinitely
+    (M1 §4 release contract): a queue-full /play would silently make
+    the cached file un-evictable.
+    """
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    player = ll.player_manager.create(guild_id=111)
+    player.queue = [_FakeAudioTrack(title=f"t{i}") for i in range(500)]
+
+    track = _track()
+    hit = audio_cache.CacheHit(path=Path("/var/cache/x"), track_info=track)
+    resolve_track_mock = AsyncMock(side_effect=AssertionError("resolve_track must not run"))
+    release_mock = AsyncMock()
+    with (
+        patch.object(audio_cache.AudioCache, "try_hit", AsyncMock(return_value=hit)),
+        patch.object(play_module.ytdlp, "resolve_track", resolve_track_mock),
+        patch.object(audio_cache.AudioCache, "release", release_mock),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            f"https://www.youtube.com/watch?v={track.video_id}",
+        )
+
+    resolve_track_mock.assert_not_awaited()
+    msg = ctx.responses[0][0]
+    assert isinstance(msg, str)
+    assert msg.startswith("Queue is full (500/500)")
+    # The pin acquired by try_hit must be released so the cached file
+    # remains evictable.
+    release_mock.assert_awaited_once_with(track.video_id)
+    # Did NOT connect to voice (cap check happens first).
+    assert bot.update_voice_state_calls == []
+
+
 async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> None:
     """Handshake timeout maps to the spec'd "audio service down" string.
 
@@ -977,7 +1016,7 @@ async def test_cached_video_skips_yt_dlp(cache: Any) -> None:
     ],
 )
 def test_parse_video_id(url: str, expected: str | None) -> None:
-    assert play_module._parse_video_id(url) == expected
+    assert ytdlp.parse_video_id(url) == expected
 
 
 def test_loader_registered_play_command() -> None:

@@ -24,7 +24,6 @@ import lightbulb
 from .. import audio_cache, lavalink_glue, playlist_cache, ux, ytdlp
 from ..errors import FetchFailed, InvalidVideoID
 from ..url_validator import is_supported_url
-from ..ytdlp import _VIDEO_ID_RE
 
 _log = logging.getLogger(__name__)
 
@@ -149,30 +148,6 @@ def _is_playlist_url(url: str) -> bool:
     return "list" in parse_qs(parsed.query)
 
 
-def _parse_video_id(url: str) -> str | None:
-    """Extract the YouTube video id from a supported URL, or ``None``."""
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return None
-    candidate: str | None = None
-    qs = parse_qs(parsed.query)
-    v_values = qs.get("v")
-    if v_values:
-        candidate = v_values[0]
-    elif parsed.hostname == "youtu.be":
-        candidate = parsed.path.lstrip("/").split("/", 1)[0] or None
-    else:
-        parts = [p for p in parsed.path.split("/") if p]
-        if len(parts) >= 2 and parts[0] in {"shorts", "embed", "v"}:
-            candidate = parts[1]
-    if candidate is None:
-        return None
-    if not _VIDEO_ID_RE.match(candidate):
-        return None
-    return candidate
-
-
 async def _load_one(
     cache: audio_cache.AudioCache,
     ll_client: lavalink.Client,
@@ -240,7 +215,7 @@ async def _play_single(
     # yt-dlp / YouTube breakage. Issue #132.
     track_info: ytdlp.TrackInfo | None = None
     cached_path: Path | None = None
-    video_id = _parse_video_id(url)
+    video_id = ytdlp.parse_video_id(url)
     if video_id is not None:
         hit = await cache.try_hit(video_id)
         if hit is not None:

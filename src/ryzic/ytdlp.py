@@ -18,6 +18,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict
 from yt_dlp import YoutubeDL
@@ -86,6 +87,30 @@ def validate_video_id(video_id: str) -> None:
     """Raise :class:`InvalidVideoID` if ``video_id`` is outside the allowed charset/length."""
     if not _VIDEO_ID_RE.match(video_id):
         raise InvalidVideoID(f"video_id failed validation: {video_id!r}")
+
+
+def parse_video_id(url: str) -> str | None:
+    """Extract the YouTube video id from a supported URL, or ``None``."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    candidate: str | None = None
+    qs = parse_qs(parsed.query)
+    v_values = qs.get("v")
+    if v_values:
+        candidate = v_values[0]
+    elif parsed.hostname == "youtu.be":
+        candidate = parsed.path.lstrip("/").split("/", 1)[0] or None
+    else:
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0] in {"shorts", "embed", "v"}:
+            candidate = parts[1]
+    if candidate is None:
+        return None
+    if not _VIDEO_ID_RE.match(candidate):
+        return None
+    return candidate
 
 
 # Module-level singleton: ``bot.py`` reads the opt-in
