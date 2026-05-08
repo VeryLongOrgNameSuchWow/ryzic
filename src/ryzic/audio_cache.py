@@ -20,7 +20,7 @@ import os
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 import aiosqlite
 
@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS entries_lru ON entries(last_used_ts);
 """
+
+
+class CacheHit(NamedTuple):
+    path: Path
+    track_info: TrackInfo
 
 
 def _audio_path(cache_root: Path, video_id: str, ext: str) -> Path:
@@ -158,6 +163,38 @@ class AudioCache:
             if hit is not None:
                 return await self._finalize_hit(track.video_id, hit)
             return await self._download_locked(track)
+
+    async def try_hit(self, video_id: str) -> CacheHit | None:
+        """Return ``(path, TrackInfo)`` and pin if cached, else ``None``.
+
+        Caller MUST :meth:`release` exactly once on a non-``None`` return
+        (including on Lavalink load failure) — same contract as
+        :meth:`get_or_download`.
+        """
+        validate_video_id(video_id)
+        conn = self._require_conn()
+        async with conn.execute(
+            "SELECT rel_path, title, uploader, duration_ms FROM entries WHERE video_id = ?",
+            (video_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        rel_path, title, uploader, duration_ms = row
+        path = self._cache_root / rel_path
+        if not path.exists():
+            return None
+        track_info = TrackInfo(
+            video_id=video_id,
+            url=f"https://www.youtube.com/watch?v={video_id}",
+            title=title,
+            uploader=uploader,
+            duration_ms=duration_ms,
+        )
+        # Pin BEFORE touch — same ordering as ``_finalize_hit``.
+        self._in_use[video_id] += 1
+        await self._touch(video_id)
+        return CacheHit(path=path, track_info=track_info)
 
     async def _finalize_hit(self, video_id: str, path: Path) -> Path:
         """On a confirmed cache hit: pin BEFORE touch, then return.

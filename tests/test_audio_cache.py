@@ -316,6 +316,39 @@ async def test_invalid_video_id_rejected_before_io(cache: AudioCache) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def test_try_hit_returns_path_and_metadata_and_pins(cache: AudioCache) -> None:
+    track = _track()
+    with _patch_download():
+        await cache.get_or_download(track)
+        await cache.release(track.video_id)
+    hit = await cache.try_hit(track.video_id)
+    assert hit is not None
+    assert hit.path.exists()
+    assert hit.track_info.video_id == track.video_id
+    assert hit.track_info.title == track.title
+    assert hit.track_info.uploader == track.uploader
+    assert hit.track_info.duration_ms == track.duration_ms
+    # URL synthesized from video_id (the row stores no URL).
+    assert hit.track_info.url == f"https://www.youtube.com/watch?v={track.video_id}"
+    assert cache._in_use[track.video_id] == 1
+    await cache.release(track.video_id)
+
+
+async def test_try_hit_returns_none_on_miss(cache: AudioCache) -> None:
+    assert await cache.try_hit("dQw4w9WgXcQ") is None
+
+
+async def test_try_hit_returns_none_when_file_missing(cache: AudioCache) -> None:
+    track = _track()
+    with _patch_download():
+        path = await cache.get_or_download(track)
+        await cache.release(track.video_id)
+    path.unlink()
+    assert await cache.try_hit(track.video_id) is None
+    # No phantom pin on a stale row.
+    assert track.video_id not in cache._in_use
+
+
 async def test_release_decrements_and_pops_at_zero(cache: AudioCache) -> None:
     track = _track()
     with _patch_download():
