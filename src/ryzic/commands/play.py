@@ -13,6 +13,7 @@ arming (only ``QueueEndEvent`` arms it, and nothing ever played).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 
@@ -151,19 +152,26 @@ async def _load_one(
     cache: audio_cache.AudioCache,
     ll_client: lavalink.Client,
     track_info: ytdlp.TrackInfo,
+    *,
+    cached_path: Path | None = None,
 ) -> lavalink.AudioTrack | None:
     """Download ``track_info`` and ask Lavalink for its AudioTrack.
 
-    Returns ``None`` on any failure (yt-dlp error, lavalink LOAD_FAILED,
-    lavalink EMPTY). Releases the audio cache pin on lavalink failure
-    so a transient load problem cannot permanently block eviction
-    (M1 §4 release contract).
+    When ``cached_path`` is provided, ``track_info`` is already pinned by
+    a prior :meth:`AudioCache.try_hit`; skip ``get_or_download``. Returns
+    ``None`` on any failure (yt-dlp error, lavalink LOAD_FAILED, lavalink
+    EMPTY). Releases the audio cache pin on lavalink failure so a
+    transient load problem cannot permanently block eviction (M1 §4
+    release contract).
     """
-    try:
-        path = await cache.get_or_download(track_info)
-    except (FetchFailed, InvalidVideoID) as exc:
-        _log.warning("yt-dlp download failed for %s: %s", track_info.url, exc)
-        return None
+    if cached_path is not None:
+        path = cached_path
+    else:
+        try:
+            path = await cache.get_or_download(track_info)
+        except (FetchFailed, InvalidVideoID) as exc:
+            _log.warning("yt-dlp download failed for %s: %s", track_info.url, exc)
+            return None
 
     nodes = list(ll_client.node_manager.nodes)
     if not nodes:
@@ -203,14 +211,28 @@ async def _play_single(
     channel_id: int,
 ) -> None:
     """Resolve + enqueue a single track URL."""
-    try:
-        track_info = await ytdlp.resolve_track(url, cache_root=cache.cache_root)
-    except FetchFailed as exc:
-        await ctx.respond(_friendly_message(exc), ephemeral=True)
-        return
+    # Cache-first: a successful prior play of the same video survives
+    # yt-dlp / YouTube breakage. Issue #132.
+    track_info: ytdlp.TrackInfo | None = None
+    cached_path: Path | None = None
+    video_id = ytdlp.parse_video_id(url)
+    if video_id is not None:
+        hit = await cache.try_hit(video_id)
+        if hit is not None:
+            track_info = hit.track_info
+            cached_path = hit.path
+
+    if track_info is None:
+        try:
+            track_info = await ytdlp.resolve_track(url, cache_root=cache.cache_root)
+        except FetchFailed as exc:
+            await ctx.respond(_friendly_message(exc), ephemeral=True)
+            return
 
     player = ll_client.player_manager.create(guild_id=guild_id)
     if len(player.queue) + 1 > _QUEUE_CAP:
+        if cached_path is not None:
+            await cache.release(track_info.video_id)
         await ctx.respond(
             f"Queue is full ({len(player.queue)}/{_QUEUE_CAP}). Wait for some tracks to finish.",
             ephemeral=True,
@@ -220,7 +242,7 @@ async def _play_single(
     # Load BEFORE connecting to voice — otherwise a load failure leaves
     # the bot dangling in voice with no auto-leave (the timer only arms
     # on QueueEndEvent, which needs a successful play).
-    audio_track = await _load_one(cache, ll_client, track_info)
+    audio_track = await _load_one(cache, ll_client, track_info, cached_path=cached_path)
     if audio_track is None:
         await ctx.respond(
             "Could not load that track. Try a different URL.",

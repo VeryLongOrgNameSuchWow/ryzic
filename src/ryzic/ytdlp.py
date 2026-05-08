@@ -18,6 +18,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict
 from yt_dlp import YoutubeDL
@@ -41,23 +42,16 @@ _UNSUPPORTED_URL_MESSAGE: Final = "Only YouTube URLs are supported."
 # User-facing sentences per M1 §3. Exact strings are part of the
 # wrapper's contract: ``/play`` displays them verbatim. Substring-matched
 # against the first line of yt-dlp's ``DownloadError``.
-#
-# ``Requested format is not available`` is a heuristic livestream marker
-# (issue #47): YouTube live streams expose only HLS manifests, not the
-# progressive ``bestaudio[ext=m4a]/...`` formats the wrapper requests, so
-# yt-dlp raises this error during format selection before the metadata
-# dict (which would carry ``is_live: True``) is returned. Without the
-# mapping, the explicit ``_is_livestream`` check in ``resolve_track`` /
-# ``download`` never runs for live URLs and operators see a raw yt-dlp
-# passthrough instead of the friendly rejection. The string is also
-# emitted for genuinely-unavailable formats on non-live videos, but in
-# practice the ``bestaudio`` fallback chain always resolves for VODs, so
-# treating it as a livestream marker is safe in this configuration.
 _FRIENDLY_ERRORS: Final[dict[str, str]] = {
     "Sign in to confirm your age": "That video is age-restricted and can't be played.",
     "Private video": "That video is private.",
     "Video unavailable": "That video is not available in this region.",
-    "Requested format is not available": _LIVESTREAM_MESSAGE,
+    # ``resolve_track`` / ``resolve_playlist`` skip format selection
+    # (``process=False``); livestreams are caught by ``_is_livestream``.
+    # This now surfaces only from ``download()`` — a real codec problem.
+    "Requested format is not available": (
+        "This track's audio format isn't available right now (likely a YouTube-side change)."
+    ),
 }
 
 # Cap and scrub yt-dlp error fragments before they surface to users.
@@ -93,6 +87,30 @@ def validate_video_id(video_id: str) -> None:
     """Raise :class:`InvalidVideoID` if ``video_id`` is outside the allowed charset/length."""
     if not _VIDEO_ID_RE.match(video_id):
         raise InvalidVideoID(f"video_id failed validation: {video_id!r}")
+
+
+def parse_video_id(url: str) -> str | None:
+    """Extract the YouTube video id from a supported URL, or ``None``."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    candidate: str | None = None
+    qs = parse_qs(parsed.query)
+    v_values = qs.get("v")
+    if v_values:
+        candidate = v_values[0]
+    elif parsed.hostname == "youtu.be":
+        candidate = parsed.path.lstrip("/").split("/", 1)[0] or None
+    else:
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0] in {"shorts", "embed", "v"}:
+            candidate = parts[1]
+    if candidate is None:
+        return None
+    if not _VIDEO_ID_RE.match(candidate):
+        return None
+    return candidate
 
 
 # Module-level singleton: ``bot.py`` reads the opt-in
@@ -224,10 +242,12 @@ def _entry_from_flat(entry: dict[str, Any]) -> TrackInfo | None:
     )
 
 
-def _sync_extract(opts: dict[str, Any], url: str, *, download: bool) -> dict[str, Any]:
+def _sync_extract(
+    opts: dict[str, Any], url: str, *, download: bool, process: bool = True
+) -> dict[str, Any]:
     """Run ``YoutubeDL.extract_info`` synchronously; return the sanitized info dict."""
     with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=download)
+        info = ydl.extract_info(url, download=download, process=process)
         if info is None:
             raise FetchFailed("yt-dlp returned no info")
         # yt-dlp ships no type stubs, so ty sees the return as ``Any``.
@@ -239,10 +259,11 @@ async def _extract(
     url: str,
     *,
     download: bool,
+    process: bool = True,
 ) -> dict[str, Any]:
     """Run ``_sync_extract`` in a worker thread and normalize errors."""
     try:
-        return await asyncio.to_thread(_sync_extract, opts, url, download=download)
+        return await asyncio.to_thread(_sync_extract, opts, url, download=download, process=process)
     except FetchFailed:
         raise
     except YoutubeDLError as exc:
@@ -268,7 +289,10 @@ async def resolve_track(url: str, *, cache_root: Path) -> TrackInfo:
     if not is_supported_url(url):
         raise FetchFailed(_UNSUPPORTED_URL_MESSAGE)
     opts = _base_opts()
-    info = await _extract(opts, url, download=False)
+    # ``process=False`` skips format selection; the bestaudio fallback chain
+    # is irrelevant on info-extract and triggers spurious "Requested format is
+    # not available" errors for some VODs (issue #132).
+    info = await _extract(opts, url, download=False, process=False)
     if _is_livestream(info):
         raise FetchFailed(_LIVESTREAM_MESSAGE)
     return _track_from_info(info)
@@ -286,7 +310,7 @@ async def resolve_playlist(url: str, *, cache_root: Path) -> PlaylistInfo:
     opts = _base_opts()
     opts["noplaylist"] = False
     opts["extract_flat"] = True
-    info = await _extract(opts, url, download=False)
+    info = await _extract(opts, url, download=False, process=False)
     playlist_id = info.get("id")
     if not isinstance(playlist_id, str):
         raise FetchFailed("yt-dlp returned no playlist id")

@@ -108,7 +108,50 @@ async def test_resolve_track_returns_track_info(tmp_path: Path) -> None:
     assert m.call_count == 1
     _opts, called_url = m.call_args.args
     assert called_url == TRACK_URL
-    assert m.call_args.kwargs == {"download": False}
+    assert m.call_args.kwargs == {"download": False, "process": False}
+
+
+async def test_resolve_track_passes_process_false(tmp_path: Path) -> None:
+    """``process=False`` skips format selection on info-extract (issue #132)."""
+    info = _track_info()
+    with patch.object(ytdlp, "_sync_extract", return_value=info) as m:
+        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+    assert m.call_args.kwargs == {"download": False, "process": False}
+
+
+async def test_resolve_playlist_passes_process_false(tmp_path: Path) -> None:
+    """``process=False`` symmetry with ``resolve_track`` (issue #132)."""
+    with patch.object(ytdlp, "_sync_extract", return_value=_playlist_info()) as m:
+        await ytdlp.resolve_playlist(PLIST_URL, cache_root=tmp_path)
+    assert m.call_args.kwargs == {"download": False, "process": False}
+
+
+async def test_resolve_track_livestream_via_live_status(tmp_path: Path) -> None:
+    """``_is_livestream`` still rejects live URLs even with ``process=False``."""
+    info = _track_info(is_live=True, live_status="is_live")
+    with (
+        patch.object(ytdlp, "_sync_extract", return_value=info),
+        pytest.raises(FetchFailed, match="Livestreams are not supported"),
+    ):
+        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+
+
+async def test_resolve_track_format_unavailable_does_not_map_to_livestream(
+    tmp_path: Path,
+) -> None:
+    """Format-not-available now surfaces a truthful message, not the livestream one."""
+    raw = (
+        "ERROR: [youtube] X: Requested format is not available. "
+        "Use --list-formats for a list of available formats"
+    )
+    with (
+        patch.object(ytdlp, "_sync_extract", side_effect=DownloadError(raw)),
+        pytest.raises(FetchFailed) as excinfo,
+    ):
+        await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+    msg = str(excinfo.value)
+    assert "Livestreams" not in msg
+    assert "audio format isn't available" in msg
 
 
 @pytest.mark.parametrize(
@@ -189,15 +232,14 @@ async def test_resolve_track_rejects_unsupported_url(tmp_path: Path) -> None:
             "ERROR: [youtube] X: Video unavailable. The uploader has not made it available.",
             "That video is not available in this region.",
         ),
-        # Issue #47: livestreams trip yt-dlp's format selector before the
-        # metadata dict (with ``is_live: True``) is returned, so the explicit
-        # ``_is_livestream`` guard never runs. Map the format-selection error
-        # to the friendly livestream message so operators see why the URL was
-        # rejected.
+        # Issue #132: ``resolve_track`` now uses ``process=False`` so format
+        # selection is skipped; ``_is_livestream`` catches live URLs via the
+        # ``live_status`` field. The format-not-available string only fires
+        # from ``download()`` after this PR — surface a truthful message.
         (
             "ERROR: [youtube] 4RmaQsA9FYs: Requested format is not available. "
             "Use --list-formats for a list of available formats",
-            "Livestreams are not supported in this version.",
+            "This track's audio format isn't available right now (likely a YouTube-side change).",
         ),
     ],
 )
@@ -393,7 +435,26 @@ async def test_download_invokes_extract_with_outtmpl(tmp_path: Path) -> None:
     opts, called_url = m.call_args.args
     assert called_url == TRACK_URL
     assert opts["outtmpl"] == str(dest.resolve())
-    assert m.call_args.kwargs == {"download": True}
+    assert m.call_args.kwargs == {"download": True, "process": True}
+
+
+async def test_download_format_unavailable_maps_to_format_message(tmp_path: Path) -> None:
+    """``download()`` runs format selection — the error here is real (issue #132)."""
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    dest = cache_root / "audio" / "dQ" / "dQw4w9WgXcQ.audio"
+    raw = (
+        "ERROR: [youtube] X: Requested format is not available. "
+        "Use --list-formats for a list of available formats"
+    )
+    with (
+        patch.object(ytdlp, "_sync_extract", side_effect=DownloadError(raw)),
+        pytest.raises(FetchFailed) as excinfo,
+    ):
+        await ytdlp.download(TRACK_URL, dest, cache_root=cache_root)
+    msg = str(excinfo.value)
+    assert "audio format isn't available" in msg
+    assert "Livestreams" not in msg
 
 
 async def test_download_rejects_livestream(tmp_path: Path) -> None:

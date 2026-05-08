@@ -27,7 +27,7 @@ import lavalink
 import lightbulb
 import pytest
 
-from ryzic import audio_cache, lavalink_glue
+from ryzic import audio_cache, lavalink_glue, ytdlp
 from ryzic.commands import play as play_module
 from ryzic.errors import FetchFailed
 from ryzic.ytdlp import PlaylistInfo, TrackInfo
@@ -517,6 +517,45 @@ async def test_single_track_queue_full_rejects(cache: Any) -> None:
     assert bot.update_voice_state_calls == []
 
 
+async def test_cache_hit_queue_full_releases_pin(cache: Any) -> None:
+    """Cache-hit queue-full path must release the pin acquired by try_hit.
+
+    Otherwise the eviction-blocking pin from try_hit lingers indefinitely
+    (M1 §4 release contract): a queue-full /play would silently make
+    the cached file un-evictable.
+    """
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    player = ll.player_manager.create(guild_id=111)
+    player.queue = [_FakeAudioTrack(title=f"t{i}") for i in range(500)]
+
+    track = _track()
+    hit = audio_cache.CacheHit(path=Path("/var/cache/x"), track_info=track)
+    resolve_track_mock = AsyncMock(side_effect=AssertionError("resolve_track must not run"))
+    release_mock = AsyncMock()
+    with (
+        patch.object(audio_cache.AudioCache, "try_hit", AsyncMock(return_value=hit)),
+        patch.object(play_module.ytdlp, "resolve_track", resolve_track_mock),
+        patch.object(audio_cache.AudioCache, "release", release_mock),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            f"https://www.youtube.com/watch?v={track.video_id}",
+        )
+
+    resolve_track_mock.assert_not_awaited()
+    msg = ctx.responses[0][0]
+    assert isinstance(msg, str)
+    assert msg.startswith("Queue is full (500/500)")
+    # The pin acquired by try_hit must be released so the cached file
+    # remains evictable.
+    release_mock.assert_awaited_once_with(track.video_id)
+    # Did NOT connect to voice (cap check happens first).
+    assert bot.update_voice_state_calls == []
+
+
 async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> None:
     """Handshake timeout maps to the spec'd "audio service down" string.
 
@@ -915,6 +954,69 @@ async def test_yt_dlp_download_failure_per_track_drops_track(cache: Any) -> None
 # ---------------------------------------------------------------------------
 # Loader plumbing
 # ---------------------------------------------------------------------------
+
+
+async def test_cached_video_skips_yt_dlp(cache: Any) -> None:
+    """Issue #132: cache-first /play insulates from yt-dlp / YouTube breakage."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    track = _track()
+    audio_track = _FakeAudioTrack(title=track.title, identifier=track.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+
+    hit = audio_cache.CacheHit(path=Path("/var/cache/x"), track_info=track)
+    resolve_track_mock = AsyncMock(side_effect=AssertionError("resolve_track must not run"))
+    get_or_download_mock = AsyncMock(side_effect=AssertionError("get_or_download must not run"))
+    with (
+        patch.object(audio_cache.AudioCache, "try_hit", AsyncMock(return_value=hit)),
+        patch.object(play_module.ytdlp, "resolve_track", resolve_track_mock),
+        patch.object(audio_cache.AudioCache, "get_or_download", get_or_download_mock),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            f"https://www.youtube.com/watch?v={track.video_id}",
+        )
+
+    resolve_track_mock.assert_not_awaited()
+    get_or_download_mock.assert_not_awaited()
+    embed = ctx.responses[0][1]["embed"]
+    assert isinstance(embed, hikari.Embed)
+    assert embed.title == "Queued"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://m.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://music.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://youtu.be/dQw4w9WgXcQ?si=xyz", "dQw4w9WgXcQ"),
+        ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://www.youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://www.youtube.com/v/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123", "dQw4w9WgXcQ"),
+        # Unsupported / malformed shapes fall through to None.
+        ("https://www.youtube.com/", None),
+        ("https://www.youtube.com/playlist?list=PL123", None),
+        ("https://www.youtube.com/watch?v=../escape", None),
+        ("not-a-url", None),
+        ("", None),
+    ],
+)
+def test_parse_video_id(url: str, expected: str | None) -> None:
+    assert ytdlp.parse_video_id(url) == expected
 
 
 def test_loader_registered_play_command() -> None:
