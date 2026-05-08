@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.4](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.3...v0.5.4) (2026-05-08)
+
+
+### Bug Fixes
+
+* cache-first /play; resolve_track skips format selection ([#133](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/133)) ([762820c](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/762820c818b09549ef9d7151fc87d406bb6c60a9)), closes [#132](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/132)
+* pass real title and author to lavalink AudioTrack ([#137](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/137)) ([fa824dc](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/fa824dc267c31e661333f92197f52f6479eadd6b)), closes [#136](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/136)
+
 ## [0.5.3](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.2...v0.5.3) (2026-05-06)
 
 
