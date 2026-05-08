@@ -154,6 +154,7 @@ class _FakeAudioTrack:
     """Slim AudioTrack stand-in — covers the duck shape ``player.add`` reads."""
 
     title: str = "Some Song"
+    author: str = "Some Artist"
     identifier: str = "abc123"
     duration: int = 213_000
     uri: str = "https://example.com/x"
@@ -888,6 +889,33 @@ async def test_playlist_voice_handshake_timeout(cache: Any) -> None:
         )
     assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
     release_mock.assert_awaited_once_with(entry.video_id)
+
+
+async def test_load_one_overrides_title_and_author_from_track_info(cache: Any) -> None:
+    """Issue #136: lavalink can't read titles from bare-codec files.
+
+    `_load_one` must overwrite the `'Unknown title'` / stale-author values
+    coming back from `node.get_tracks` with the real strings yt-dlp
+    resolved into `TrackInfo`, so log lines (track-start / track-end /
+    track-exception / track-stuck) carry the actual song name.
+    """
+    ll, node = _ll_with_one_node()
+    track_info = _track()
+    audio_track = _FakeAudioTrack(title="Unknown title", author="Unknown artist")
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+
+    result = await play_module._load_one(
+        cache,
+        cast(lavalink.Client, ll),
+        track_info,
+        cached_path=Path("/var/cache/x"),
+    )
+
+    assert result is audio_track
+    assert audio_track.title == track_info.title
+    assert audio_track.author == track_info.uploader
 
 
 async def test_load_one_handles_node_get_tracks_exception(cache: Any) -> None:

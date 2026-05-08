@@ -198,7 +198,11 @@ async def _load_one(
         await cache.release(track_info.video_id)
         _log.warning("lavalink returned no tracks for %s", path)
         return None
-    return result.tracks[0]
+    audio_track = result.tracks[0]
+    # Lavalink can't read titles from bare-codec audio files; override (#136).
+    audio_track.title = track_info.title
+    audio_track.author = track_info.uploader
+    return audio_track
 
 
 async def _play_single(
