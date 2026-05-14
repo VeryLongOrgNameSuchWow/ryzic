@@ -15,6 +15,7 @@ import pytest
 
 from ryzic import lavalink_glue, ux
 from ryzic.commands import queue as queue_module
+from ryzic.i18n import t
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeBot,
@@ -44,6 +45,7 @@ async def test_dm_invocation_returns_friendly_error() -> None:
     await queue_module._handle_queue(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.run_in_server", locale="en_US", command="queue")
     assert fake.responses[0][0] == "Run /queue in a server."
     assert fake.responses[0][1].get("ephemeral") is True
 

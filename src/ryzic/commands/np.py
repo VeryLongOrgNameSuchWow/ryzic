@@ -16,10 +16,9 @@ import lavalink
 import lightbulb
 
 from .. import lavalink_glue, ux
+from ..i18n import t
 
 loader = lightbulb.Loader()
-
-_NOTHING_PLAYING = "Nothing is playing."
 
 
 @loader.command
@@ -43,22 +42,25 @@ class NowPlaying(
 async def _handle_np(ctx: lightbulb.Context, *, private: bool = False) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
-        await ctx.respond("Run /np in a server.", ephemeral=True)
+        await ctx.respond(
+            t("voice.error.run_in_server", locale="en_US", command="np"),
+            ephemeral=True,
+        )
         return
 
     ll_client = lavalink_glue.get_lavalink_client()
     if ll_client is None:
-        await ctx.respond(_NOTHING_PLAYING, ephemeral=True)
+        await ctx.respond(t("np.error.nothing_playing", locale="en_US"), ephemeral=True)
         return
 
     player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
     if player is None or player.current is None:
-        await ctx.respond(_NOTHING_PLAYING, ephemeral=True)
+        await ctx.respond(t("np.error.nothing_playing", locale="en_US"), ephemeral=True)
         return
 
     info = ux.get_track_info(player.current)
     if info is None:
-        await ctx.respond(_NOTHING_PLAYING, ephemeral=True)
+        await ctx.respond(t("np.error.nothing_playing", locale="en_US"), ephemeral=True)
         return
 
     embed = ux.build_simple_now_playing_embed(

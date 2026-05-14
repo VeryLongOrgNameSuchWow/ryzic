@@ -23,6 +23,7 @@ import lightbulb
 
 from .. import audio_cache, lavalink_glue, playlist_cache, ux, ytdlp
 from ..errors import FetchFailed, InvalidVideoID
+from ..i18n import t
 from ..url_validator import is_supported_url
 
 _log = logging.getLogger(__name__)
@@ -79,7 +80,10 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
     if guild_id is None:
         # ``contexts=[GUILD]`` should already prevent this, but if a
         # future re-registration drops the constraint we fail safe.
-        await ctx.respond("Run /play in a server.", ephemeral=True)
+        await ctx.respond(
+            t("voice.error.run_in_server", locale="en_US", command="play"),
+            ephemeral=True,
+        )
         return
 
     if not is_supported_url(url):

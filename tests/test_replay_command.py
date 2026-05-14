@@ -16,6 +16,7 @@ import pytest
 
 from ryzic import track_history
 from ryzic.commands import replay as replay_module
+from ryzic.i18n import t
 from tests._command_helpers import (
     FakeBot,
     context_for,
@@ -49,6 +50,7 @@ async def test_outside_guild_short_circuits(
     await replay_module._handle_replay(ctx, position=1)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.run_in_server", locale="en_US", command="replay")
     assert fake.responses[0][0] == "Run /replay in a server."
     assert fake.responses[0][1].get("ephemeral") is True
     assert play_calls == []

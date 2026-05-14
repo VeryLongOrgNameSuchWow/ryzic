@@ -21,6 +21,7 @@ import lavalink
 import lightbulb
 
 from .. import lavalink_glue, ux
+from ..i18n import t
 from ..voice_check import ensure_same_voice
 
 loader = lightbulb.Loader()
@@ -49,12 +50,12 @@ async def _handle_skip(ctx: lightbulb.Context) -> None:
 
     ll_client = lavalink_glue.get_lavalink_client()
     if ll_client is None:
-        await ctx.respond("Nothing is playing.", ephemeral=True)
+        await ctx.respond(t("np.error.nothing_playing", locale="en_US"), ephemeral=True)
         return
 
     player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
     if player is None or not player.is_playing or player.current is None:
-        await ctx.respond("Nothing is playing.", ephemeral=True)
+        await ctx.respond(t("np.error.nothing_playing", locale="en_US"), ephemeral=True)
         return
 
     skipped_info = ux.get_track_info(player.current)

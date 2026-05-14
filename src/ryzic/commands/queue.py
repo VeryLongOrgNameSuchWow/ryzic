@@ -23,6 +23,7 @@ import lavalink
 import lightbulb
 
 from .. import lavalink_glue, ux
+from ..i18n import t
 
 loader = lightbulb.Loader()
 
@@ -54,7 +55,10 @@ class Queue(
 async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool = False) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
-        await ctx.respond("Run /queue in a server.", ephemeral=True)
+        await ctx.respond(
+            t("voice.error.run_in_server", locale="en_US", command="queue"),
+            ephemeral=True,
+        )
         return
 
     empty_message = "Queue is empty and nothing is playing."
