@@ -105,6 +105,7 @@
     "play.command.description": "Queue a YouTube track or playlist URL.",
     "play.param.url.description": "YouTube video or playlist URL.",
     "play.error.audio_service_down": "Audio service is down. Try again in a minute.",
+    "play.error.voice_handshake_failed": "Could not connect to voice. Try again, or make sure I have Connect/Speak in that channel.",
     "play.error.join_voice_first": "Join a voice channel first.",
     "play.error.stage_unsupported": "Stage channels aren't supported. Use a regular voice channel.",
     "play.error.bot_in_other_channel": "I'm already playing in <#%{channel_id}>. Join that channel.",

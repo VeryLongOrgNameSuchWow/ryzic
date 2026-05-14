@@ -278,7 +278,7 @@ async def _play_single(
     if not await lavalink_glue.wait_for_voice_ready(guild_id, timeout=_VOICE_READY_TIMEOUT_S):
         await cache.release(track_info.video_id)
         await ctx.respond(
-            t("play.error.audio_service_down", locale=locale_for_ephemeral(ctx)),
+            t("play.error.voice_handshake_failed", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
@@ -367,7 +367,7 @@ async def _play_playlist(
     if not await lavalink_glue.wait_for_voice_ready(guild_id, timeout=_VOICE_READY_TIMEOUT_S):
         await cache.release(info.entries[first_index].video_id)
         await ctx.respond(
-            t("play.error.audio_service_down", locale=locale_for_ephemeral(ctx)),
+            t("play.error.voice_handshake_failed", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
