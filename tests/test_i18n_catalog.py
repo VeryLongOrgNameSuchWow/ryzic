@@ -164,7 +164,7 @@ def test_every_template_placeholder_is_passed_at_the_call_site() -> None:
         expected = _template_placeholders(catalog[key])
         provided = {kw.arg for kw in node.keywords if kw.arg and kw.arg not in _NON_VAR_KWARGS}
         # ``**vars`` unpacking shows up as ``arg is None``; we can't verify
-        # the names so we accept the call (e.g. ``commands/play.py:410``).
+        # the names statically so we accept the call.
         if any(kw.arg is None for kw in node.keywords):
             continue
         missing = expected - provided
