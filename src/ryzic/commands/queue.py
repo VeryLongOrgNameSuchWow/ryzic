@@ -70,20 +70,16 @@ async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool 
         )
         return
 
+    empty_message = t("queue.error.empty_and_nothing_playing", locale=locale_for_ephemeral(ctx))
+
     ll_client = lavalink_glue.get_lavalink_client()
     if ll_client is None:
-        await ctx.respond(
-            t("queue.error.empty_and_nothing_playing", locale=locale_for_ephemeral(ctx)),
-            ephemeral=True,
-        )
+        await ctx.respond(empty_message, ephemeral=True)
         return
 
     player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
     if player is None or player.current is None:
-        await ctx.respond(
-            t("queue.error.empty_and_nothing_playing", locale=locale_for_ephemeral(ctx)),
-            ephemeral=True,
-        )
+        await ctx.respond(empty_message, ephemeral=True)
         return
 
     now_playing_info = ux.get_track_info(player.current)
@@ -92,10 +88,7 @@ async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool 
         # (e.g. a future code path that bypasses ``attach_track_info``).
         # Treat as if nothing is playing rather than rendering a half-
         # populated embed.
-        await ctx.respond(
-            t("queue.error.empty_and_nothing_playing", locale=locale_for_ephemeral(ctx)),
-            ephemeral=True,
-        )
+        await ctx.respond(empty_message, ephemeral=True)
         return
 
     queue_entries: list[tuple[ux.TrackInfo, int]] = []
