@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,16 @@ def test_package_modules_import() -> None:
     assert hasattr(config, "load")
     assert errors.FetchFailed.__mro__[1] is Exception
     assert errors.InvalidVideoID.__mro__[1] is Exception
+
+
+def test_i18n_catalog_ships_with_package() -> None:
+    """Canary: the en_US catalog must be installable-data, not a dev-tree
+    artefact. If a future ``[tool.uv.build-backend]`` change drops it from
+    the wheel/sdist, this fails before the bot boots in production."""
+    catalog = resources.files("ryzic.i18n.locales") / "en_US.json"
+    assert catalog.is_file()
+    payload = json.loads(catalog.read_text(encoding="utf-8"))
+    assert "en_US" in payload
 
 
 def test_config_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
