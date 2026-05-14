@@ -35,7 +35,7 @@ class NowPlaying(
 ):
     private = lightbulb.boolean(
         "private",
-        t("np.param.private.description", locale="en_US"),
+        t("common.param.private.description", locale="en_US"),
         default=False,
     )
 
@@ -53,7 +53,7 @@ class Np(
 ):
     private = lightbulb.boolean(
         "private",
-        t("np.param.private.description", locale="en_US"),
+        t("common.param.private.description", locale="en_US"),
         default=False,
     )
 

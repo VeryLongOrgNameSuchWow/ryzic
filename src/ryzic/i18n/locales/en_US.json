@@ -60,7 +60,8 @@
     "np.error.nothing_playing": "Nothing is playing.",
 
     "np.command.description": "Show what's playing right now.",
-    "np.param.private.description": "Only you see the response (default: False — public).",
+
+    "common.param.private.description": "Only you see the response.",
 
     "seek.command.description": "Jump to a position in the current track (m:ss, +30, or -15).",
     "seek.param.position.description": "e.g. 1:30 (jump to 1m30s), +30 (skip forward 30s), -15 (go back 15s).",
@@ -91,6 +92,14 @@
     },
 
     "leave.command.description": "Disconnect from voice and clear the queue.",
-    "leave.success.left": "Left voice channel. Queue cleared."
+    "leave.success.left": "Left voice channel. Queue cleared.",
+
+    "queue.command.description": "Show the current track and upcoming queue.",
+    "queue.param.page.description": "Page number (10 tracks per page; 1 = next up).",
+    "queue.error.empty_and_nothing_playing": "Queue is empty and nothing is playing.",
+    "queue.error.too_few_pages": {
+      "one": "Queue has only 1 page.",
+      "many": "Queue has only %{count} pages."
+    }
   }
 }

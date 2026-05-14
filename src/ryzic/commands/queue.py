@@ -10,6 +10,11 @@ arguments:
   text channel. Empty/error paths are ephemeral regardless — failure
   responses don't pollute the channel either way.
 
+Issue #148: ``private`` defaults to ``True`` — status-introspection
+commands should answer the invoker, not the channel. The flag stays so
+the invoker can opt to a public response when they want to point others
+at the queue.
+
 No voice precondition — queue introspection is read-only and useful
 from any text channel in the guild.
 """
@@ -23,7 +28,7 @@ import lavalink
 import lightbulb
 
 from .. import lavalink_glue, ux
-from ..i18n import t
+from ..i18n import locale_for_ephemeral, locale_for_public, t
 
 loader = lightbulb.Loader()
 
@@ -32,19 +37,19 @@ loader = lightbulb.Loader()
 class Queue(
     lightbulb.SlashCommand,
     name="queue",
-    description="Show the current track and upcoming queue.",
+    description=t("queue.command.description", locale="en_US"),
     contexts=[hikari.ApplicationContextType.GUILD],
 ):
     page = lightbulb.integer(
         "page",
-        "Page number (10 tracks per page; 1 = next up).",
+        t("queue.param.page.description", locale="en_US"),
         default=1,
         min_value=1,
     )
     private = lightbulb.boolean(
         "private",
-        "Only you see the response (default: False — public).",
-        default=False,
+        t("common.param.private.description", locale="en_US"),
+        default=True,
     )
 
     @lightbulb.invoke
@@ -52,16 +57,20 @@ class Queue(
         await _handle_queue(ctx, page=self.page, private=self.private)
 
 
-async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool = False) -> None:
+async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool = True) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
         await ctx.respond(
-            t("voice.error.run_in_server", locale="en_US", command="queue"),
+            t(
+                "voice.error.run_in_server",
+                locale=locale_for_ephemeral(ctx),
+                command=ctx.command_data.name,
+            ),
             ephemeral=True,
         )
         return
 
-    empty_message = "Queue is empty and nothing is playing."
+    empty_message = t("queue.error.empty_and_nothing_playing", locale=locale_for_ephemeral(ctx))
 
     ll_client = lavalink_glue.get_lavalink_client()
     if ll_client is None:
@@ -95,13 +104,17 @@ async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool 
     # nonsense ``page > 0`` ephemeral when the user passes the default.
     total_pages = max(1, (len(queue_entries) + ux.QUEUE_PAGE_SIZE - 1) // ux.QUEUE_PAGE_SIZE)
     if page > total_pages:
-        plural = "" if total_pages == 1 else "s"
         await ctx.respond(
-            f"Queue has only {total_pages} page{plural}.",
+            t(
+                "queue.error.too_few_pages",
+                locale=locale_for_ephemeral(ctx),
+                count=total_pages,
+            ),
             ephemeral=True,
         )
         return
 
+    locale = locale_for_ephemeral(ctx) if private else locale_for_public(ctx)
     embed = ux.build_queue_embed(
         now_playing=now_playing_info,
         now_playing_position_ms=player.position,
@@ -109,6 +122,6 @@ async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool 
         queue=queue_entries,
         page=page,
         total_pages=total_pages,
-        locale="en_US",
+        locale=locale,
     )
     await ctx.respond(embed=embed, ephemeral=private)
