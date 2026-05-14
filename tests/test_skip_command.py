@@ -101,6 +101,7 @@ async def test_skip_with_more_in_queue_omits_empty_suffix() -> None:
 
     assert player.skip_calls == 1
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("skip.success.with_queue", locale="en_US", title="Now")
     assert fake.responses[0][0] == "Skipped **Now**."
     # Public response → no ephemeral kwarg.
     assert "ephemeral" not in fake.responses[0][1]
@@ -119,6 +120,7 @@ async def test_skip_last_track_appends_queue_empty() -> None:
     await skip_module._handle_skip(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("skip.success.queue_empty", locale="en_US", title="Last")
     assert fake.responses[0][0] == "Skipped **Last**. Queue is empty."
 
 
@@ -218,4 +220,7 @@ async def test_skip_while_paused_with_empty_queue_does_not_re_pause() -> None:
 
 def test_skip_loader_registered() -> None:
     assert skip_module.Skip._command_data.name == "skip"
-    assert skip_module.Skip._command_data.description.startswith("Skip")
+    assert skip_module.Skip._command_data.description == t(
+        "skip.command.description", locale="en_US"
+    )
+    assert skip_module.Skip._command_data.description == "Skip the currently-playing track."

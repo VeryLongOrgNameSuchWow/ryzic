@@ -9,6 +9,7 @@ import pytest
 
 from ryzic import audio_cache, lavalink_glue
 from ryzic.commands import leave as leave_module
+from ryzic.i18n import t
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeBot,
@@ -37,6 +38,8 @@ async def test_voice_precondition_short_circuits() -> None:
     await leave_module._handle_leave(ctx)
 
     fake = cast(Any, ctx)
+    # Comes from ``ensure_same_voice`` (voice_check.py), not leave.py.
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
     assert bot.update_voice_state_calls == []
 
@@ -49,6 +52,7 @@ async def test_no_lavalink_client_returns_friendly_error() -> None:
     await leave_module._handle_leave(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
     assert fake.responses[0][1].get("ephemeral") is True
 
@@ -61,6 +65,7 @@ async def test_no_player_returns_friendly_error() -> None:
     await leave_module._handle_leave(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
     assert bot.update_voice_state_calls == []
 
@@ -76,6 +81,7 @@ async def test_player_disconnected_returns_friendly_error() -> None:
     await leave_module._handle_leave(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
     assert player.stop_calls == 0
 
@@ -96,6 +102,7 @@ async def test_leave_stops_clears_disconnects_and_responds() -> None:
     assert player.queue == []
     assert bot.update_voice_state_calls == [(111, None)]
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("leave.success.left", locale="en_US")
     assert fake.responses[0][0] == "Left voice channel. Queue cleared."
     assert "ephemeral" not in fake.responses[0][1]
 
@@ -136,3 +143,9 @@ async def test_leave_releases_audio_cache_pins_for_queued_tracks() -> None:
 
 def test_leave_loader_registered() -> None:
     assert leave_module.Leave._command_data.name == "leave"
+    assert leave_module.Leave._command_data.description == t(
+        "leave.command.description", locale="en_US"
+    )
+    assert (
+        leave_module.Leave._command_data.description == "Disconnect from voice and clear the queue."
+    )

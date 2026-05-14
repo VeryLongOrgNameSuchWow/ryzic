@@ -21,7 +21,7 @@ import lavalink
 import lightbulb
 
 from .. import lavalink_glue, ux
-from ..i18n import t
+from ..i18n import locale_for_ephemeral, locale_for_public, t
 from ..voice_check import ensure_same_voice
 
 loader = lightbulb.Loader()
@@ -31,7 +31,7 @@ loader = lightbulb.Loader()
 class Skip(
     lightbulb.SlashCommand,
     name="skip",
-    description="Skip the currently-playing track.",
+    description=t("skip.command.description", locale="en_US"),
     contexts=[hikari.ApplicationContextType.GUILD],
 ):
     @lightbulb.invoke
@@ -50,12 +50,18 @@ async def _handle_skip(ctx: lightbulb.Context) -> None:
 
     ll_client = lavalink_glue.get_lavalink_client()
     if ll_client is None:
-        await ctx.respond(t("np.error.nothing_playing", locale="en_US"), ephemeral=True)
+        await ctx.respond(
+            t("np.error.nothing_playing", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
     if player is None or not player.is_playing or player.current is None:
-        await ctx.respond(t("np.error.nothing_playing", locale="en_US"), ephemeral=True)
+        await ctx.respond(
+            t("np.error.nothing_playing", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     skipped_info = ux.get_track_info(player.current)
@@ -70,14 +76,16 @@ async def _handle_skip(ctx: lightbulb.Context) -> None:
     if was_paused and player.current is not None:
         await player.set_pause(True)
 
+    # User-controlled title; escape before splicing into the catalog's bold template.
     safe_title = ux.safe_truncate(ux.escape_markdown(skipped_title), 256)
-    message = f"Skipped **{safe_title}**."
     # ``DefaultPlayer.skip`` synchronously pops the next track off
     # ``queue`` and plays it; if the queue was empty it instead clears
-    # ``current`` and dispatches QueueEndEvent. We append the "queue is
-    # empty" suffix only when both are gone — otherwise a queue with
+    # ``current`` and dispatches QueueEndEvent. We pick the "queue is
+    # empty" variant only when both are gone — otherwise a queue with
     # one track left would say "empty" while the just-promoted track
     # plays, which is misleading.
     if player.current is None and not player.queue:
-        message = f"{message} Queue is empty."
-    await ctx.respond(message)
+        key = "skip.success.queue_empty"
+    else:
+        key = "skip.success.with_queue"
+    await ctx.respond(t(key, locale=locale_for_public(ctx), title=safe_title))

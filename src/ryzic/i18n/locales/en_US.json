@@ -57,6 +57,31 @@
     "voice.error.bot_not_in_voice": "I'm not in a voice channel.",
     "voice.error.join_my_channel": "Join <#%{channel_id}> to use this.",
 
-    "np.error.nothing_playing": "Nothing is playing."
+    "np.error.nothing_playing": "Nothing is playing.",
+
+    "pause.command.description": "Pause the currently-playing track.",
+    "pause.error.already_paused": "Already paused. Use /resume.",
+    "pause.success.paused": "Paused.",
+
+    "resume.command.description": "Resume the paused track.",
+    "resume.error.already_playing": "Already playing. Use /pause to pause.",
+    "resume.success.resumed": "Resumed.",
+
+    "skip.command.description": "Skip the currently-playing track.",
+    "skip.success.with_queue": "Skipped **%{title}**.",
+    "skip.success.queue_empty": "Skipped **%{title}**. Queue is empty.",
+
+    "recent.command.description": "Show the last tracks played in this server.",
+    "recent.error.no_history": "No tracks have played yet.",
+
+    "replay.command.description": "Re-queue a previously-played track from /recent.",
+    "replay.param.position.description": "Position in /recent (1 = most recent). Defaults to 1.",
+    "replay.error.out_of_range": {
+      "one": "Only 1 track in history.",
+      "many": "Only %{count} tracks in history."
+    },
+
+    "leave.command.description": "Disconnect from voice and clear the queue.",
+    "leave.success.left": "Left voice channel. Queue cleared."
   }
 }
