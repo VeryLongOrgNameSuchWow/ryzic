@@ -1,8 +1,8 @@
 """Persistent now-playing controller embed (issue #90).
 
 A long-lived embed in the channel where ``/play`` was last invoked,
-showing the currently-playing track plus four media-remote buttons
-(pause/resume, skip, stop). Updates on every play/pause/resume/skip/end
+showing the currently-playing track plus three media-remote buttons
+(pause/resume, skip, leave). Updates on every play/pause/resume/skip/end
 so the channel always carries an accurate current-state surface.
 
 Channel choice follows :data:`lavalink_glue.last_play_channel`: the
@@ -35,6 +35,7 @@ import hikari
 import lavalink
 
 from . import lavalink_glue, ux
+from .i18n import t
 
 _log = logging.getLogger(__name__)
 
@@ -46,11 +47,22 @@ _log = logging.getLogger(__name__)
 BUTTON_PAUSE = "ryzic:np:pause"
 BUTTON_RESUME = "ryzic:np:resume"
 BUTTON_SKIP = "ryzic:np:skip"
+# custom_id wire-compat preserved per #147; user-visible label is "Leave"
+# (see ``_LABEL_LEAVE`` below). Existing controller embeds posted before
+# the label rename remain dispatchable.
 BUTTON_STOP = "ryzic:np:stop"
 
 # All of our custom_ids share this prefix; the interaction listener
 # filters with ``startswith`` to short-circuit cheap.
 _CUSTOM_ID_PREFIX = "ryzic:np:"
+
+# Module-import-time button labels — locale is hard-coded en_US because
+# controller renders are event-driven (no ctx). Same shape as the wave's
+# Option A pattern for slash-command descriptions.
+_LABEL_PAUSE = t("controller.button.pause", locale="en_US")
+_LABEL_RESUME = t("controller.button.resume", locale="en_US")
+_LABEL_SKIP = t("controller.button.skip", locale="en_US")
+_LABEL_LEAVE = t("controller.button.leave", locale="en_US")
 
 
 # Per-guild ``(channel_id, message_id)`` of the active controller. Module
@@ -72,9 +84,9 @@ def is_known_message(guild_id: int, message_id: int) -> bool:
 
 
 def _build_components() -> list[hikari.api.MessageActionRowBuilder]:
-    """Build the 4-button media-remote row.
+    """Build the 3-button media-remote row.
 
-    Order matches the issue body's spec: pause/resume · skip · stop.
+    Order matches the issue body's spec: pause/resume · skip · leave.
     The pause/resume button surfaces both states behind one custom_id
     pair — the renderer picks which custom_id to bind based on player
     state, so the user always sees one of the two icons at a time.
@@ -84,19 +96,19 @@ def _build_components() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SECONDARY,
         BUTTON_PAUSE,
         emoji="⏸️",  # ⏸
-        label="Pause",
+        label=_LABEL_PAUSE,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",  # ⏭
-        label="Skip",
+        label=_LABEL_SKIP,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.DANGER,
         BUTTON_STOP,
         emoji="⏹️",  # ⏹
-        label="Stop",
+        label=_LABEL_LEAVE,
     )
     return [row]
 
@@ -108,19 +120,19 @@ def _build_components_paused() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SUCCESS,
         BUTTON_RESUME,
         emoji="▶️",  # ▶
-        label="Resume",
+        label=_LABEL_RESUME,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",  # ⏭
-        label="Skip",
+        label=_LABEL_SKIP,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.DANGER,
         BUTTON_STOP,
         emoji="⏹️",  # ⏹
-        label="Stop",
+        label=_LABEL_LEAVE,
     )
     return [row]
 
@@ -132,21 +144,21 @@ def _build_idle_components() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SECONDARY,
         BUTTON_PAUSE,
         emoji="⏸️",
-        label="Pause",
+        label=_LABEL_PAUSE,
         is_disabled=True,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",
-        label="Skip",
+        label=_LABEL_SKIP,
         is_disabled=True,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_STOP,
         emoji="⏹️",
-        label="Stop",
+        label=_LABEL_LEAVE,
         is_disabled=True,
     )
     return [row]

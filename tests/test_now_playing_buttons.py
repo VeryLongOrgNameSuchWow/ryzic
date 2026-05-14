@@ -15,6 +15,7 @@ import hikari
 import pytest
 
 from ryzic import lavalink_glue, now_playing, now_playing_buttons
+from ryzic.i18n import t
 from tests._command_helpers import (
     FakeCache,
     FakeLavalinkClient,
@@ -163,7 +164,7 @@ async def test_stale_controller_click_returns_graceful_ephemeral() -> None:
 
     assert len(interaction.responses) == 1
     response = interaction.responses[0]
-    assert "previous session" in str(response["content"])
+    assert response["content"] == t("controller.error.stale_session", locale="en_US")
     assert response["flags"] == hikari.MessageFlag.EPHEMERAL
 
 
@@ -285,8 +286,66 @@ async def test_adapter_propagates_ephemeral_flag() -> None:
     await now_playing_buttons.on_interaction(_event(interaction, bot))
 
     response = interaction.responses[0]
-    assert response["content"] == "Nothing is playing."
+    assert response["content"] == t("np.error.nothing_playing", locale="en_US")
     assert response["flags"] == hikari.MessageFlag.EPHEMERAL
+
+
+# ---------------------------------------------------------------------------
+# Controller-error ephemerals (unknown button, no-guild, stale)
+# ---------------------------------------------------------------------------
+
+
+async def test_unknown_ryzic_np_custom_id_returns_unknown_button_ephemeral() -> None:
+    """A ``ryzic:np:`` custom_id not in the dispatch table renders the
+    forward-compat 'not wired up' ephemeral.
+    """
+    bot = _both_in_voice()
+    interaction = _make_interaction(custom_id="ryzic:np:future", message_id=9000)
+
+    await now_playing_buttons.on_interaction(_event(interaction, bot))
+
+    assert len(interaction.responses) == 1
+    response = interaction.responses[0]
+    assert response["content"] == t("controller.error.unknown_button", locale="en_US")
+    assert response["flags"] == hikari.MessageFlag.EPHEMERAL
+
+
+async def test_dm_button_press_returns_guild_only_ephemeral() -> None:
+    bot = _both_in_voice()
+    interaction = _make_interaction(
+        custom_id=now_playing.BUTTON_PAUSE, guild_id=None, message_id=9000
+    )
+
+    await now_playing_buttons.on_interaction(_event(interaction, bot))
+
+    assert len(interaction.responses) == 1
+    response = interaction.responses[0]
+    assert response["content"] == t("controller.error.guild_only", locale="en_US")
+    assert response["flags"] == hikari.MessageFlag.EPHEMERAL
+
+
+async def test_handler_exception_returns_handler_failed_ephemeral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the dispatched handler raises, surface the controller error key."""
+    bot = _both_in_voice()
+    now_playing._controllers[111] = (555, 9000)
+    interaction = _make_interaction(custom_id=now_playing.BUTTON_PAUSE, message_id=9000)
+
+    async def _boom(*_a: Any, **_kw: Any) -> None:
+        raise RuntimeError("simulated handler failure")
+
+    monkeypatch.setitem(now_playing_buttons._DISPATCH, now_playing.BUTTON_PAUSE, _boom)
+
+    await now_playing_buttons.on_interaction(_event(interaction, bot))
+
+    # The handler raised before responding; the recovery path fires the
+    # controller.error.handler_failed key as a fresh initial response.
+    assert any(
+        r["content"] == t("controller.error.handler_failed", locale="en_US")
+        and r["flags"] == hikari.MessageFlag.EPHEMERAL
+        for r in interaction.responses
+    )
 
 
 # ---------------------------------------------------------------------------

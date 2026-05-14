@@ -1,6 +1,6 @@
 """Hikari interaction handler for the now-playing controller buttons.
 
-Routes ⏯ Pause/Resume · ⏭ Skip · ⏹ Stop button clicks to the same
+Routes ⏯ Pause/Resume · ⏭ Skip · ⏹ Leave button clicks to the same
 ``_handle_*`` bodies the slash commands use, via a slim
 :class:`InteractionContextLike` adapter that exposes the surface those
 handlers read off ``lightbulb.Context`` (``guild_id``, ``user``,
@@ -29,6 +29,7 @@ from .commands.leave import _handle_leave
 from .commands.pause import _handle_pause
 from .commands.resume import _handle_resume
 from .commands.skip import _handle_skip
+from .i18n import locale_for_ephemeral, t
 
 _log = logging.getLogger(__name__)
 
@@ -116,13 +117,16 @@ async def on_interaction(event: hikari.InteractionCreateEvent) -> None:
     custom_id = interaction.custom_id
     if not custom_id.startswith(now_playing._CUSTOM_ID_PREFIX):
         return
+    bot = cast(hikari.GatewayBot, event.app)
+    adapter = InteractionContextLike(interaction, bot)
+    locale = locale_for_ephemeral(cast(lightbulb.Context, adapter))
     handler = _DISPATCH.get(custom_id)
     if handler is None:
         # Unknown ryzic:np:* custom_id (forward-compat: a future button
         # added without a dispatch entry). Acknowledge silently.
         await interaction.create_initial_response(
             hikari.ResponseType.MESSAGE_CREATE,
-            content="That button isn't wired up.",
+            content=t("controller.error.unknown_button", locale=locale),
             flags=hikari.MessageFlag.EPHEMERAL,
         )
         return
@@ -132,7 +136,7 @@ async def on_interaction(event: hikari.InteractionCreateEvent) -> None:
         # but the dispatch handlers all assume guild context — fail safe.
         await interaction.create_initial_response(
             hikari.ResponseType.MESSAGE_CREATE,
-            content="Controller buttons only work in a server.",
+            content=t("controller.error.guild_only", locale=locale),
             flags=hikari.MessageFlag.EPHEMERAL,
         )
         return
@@ -142,15 +146,13 @@ async def on_interaction(event: hikari.InteractionCreateEvent) -> None:
         # issue #90 hard line: ephemeral graceful failure.
         await interaction.create_initial_response(
             hikari.ResponseType.MESSAGE_CREATE,
-            content="This controller is from a previous session. Run /play to start a new one.",
+            content=t("controller.error.stale_session", locale=locale),
             flags=hikari.MessageFlag.EPHEMERAL,
         )
         return
 
-    bot = cast(hikari.GatewayBot, event.app)
-    adapter = cast(lightbulb.Context, InteractionContextLike(interaction, bot))
     try:
-        await handler(adapter)
+        await handler(cast(lightbulb.Context, adapter))
     except Exception:
         _log.exception(
             "guild=%d controller-button %s handler failed",
@@ -162,7 +164,7 @@ async def on_interaction(event: hikari.InteractionCreateEvent) -> None:
         try:
             await interaction.create_initial_response(
                 hikari.ResponseType.MESSAGE_CREATE,
-                content="Something went wrong. Try the slash command directly.",
+                content=t("controller.error.handler_failed", locale=locale),
                 flags=hikari.MessageFlag.EPHEMERAL,
             )
         except hikari.HikariError:
