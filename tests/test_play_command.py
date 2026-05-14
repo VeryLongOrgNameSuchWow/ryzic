@@ -609,7 +609,7 @@ async def test_cache_hit_queue_full_releases_pin(cache: Any) -> None:
 
 
 async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> None:
-    """Handshake timeout maps to the spec'd "audio service down" string.
+    """Handshake timeout maps to the voice-handshake-failed copy.
 
     The track must already be loaded by the time we connect (load-first
     order, MEDIUM-1) so the test wires up the full happy load path then
@@ -907,7 +907,7 @@ async def test_playlist_yt_dlp_total_failure_returns_friendly(cache: Any) -> Non
 
 
 async def test_playlist_voice_handshake_timeout(cache: Any) -> None:
-    """Handshake timeout maps to the spec'd "audio service down" string."""
+    """Handshake timeout maps to the voice-handshake-failed copy."""
     bot = _bot_in_voice_with(user_channel_id=999)
     ctx = _FakeContext(bot)
     ll, node = _ll_with_one_node()
