@@ -25,6 +25,7 @@ from .. import audio_cache, lavalink_glue, playlist_cache, ux, ytdlp
 from ..errors import FetchFailed, InvalidVideoID
 from ..i18n import locale_for_ephemeral, locale_for_public, t
 from ..url_validator import is_supported_url
+from .resume import _handle_resume
 
 _log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class Play(
     url = lightbulb.string(
         "url",
         t("play.param.url.description", locale="en_US"),
-        min_length=1,
+        default="",
         max_length=500,
     )
 
@@ -80,6 +81,22 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
                 locale=locale_for_ephemeral(ctx),
                 command=ctx.command_data.name,
             ),
+            ephemeral=True,
+        )
+        return
+
+    if not url.strip():
+        # Bare ``/play`` resumes a paused track. Delegate to
+        # ``_handle_resume`` (it owns the same-voice guard); surface the
+        # URL hint for the genuinely-idle case.
+        ll_client = lavalink_glue.get_lavalink_client()
+        if ll_client is not None:
+            player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
+            if player is not None and player.is_playing and player.paused:
+                await _handle_resume(ctx)
+                return
+        await ctx.respond(
+            t("play.error.no_url_and_nothing_playing", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
