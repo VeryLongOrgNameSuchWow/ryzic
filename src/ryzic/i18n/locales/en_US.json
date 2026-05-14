@@ -1,5 +1,55 @@
 {
   "en_US": {
-    "i18n.smoke": "ok"
+    "i18n.smoke": "ok",
+
+    "ux.queued.title": "Queued",
+    "ux.queued.description": "[**%{title}**](%{url})",
+    "ux.queued.field.channel.name": "Channel",
+    "ux.queued.field.requested_by.name": "Requested by",
+    "ux.queued.footer.playing_now": "by %{uploader} · %{duration} · playing now",
+    "ux.queued.footer.in_queue": "by %{uploader} · %{duration} · position %{position} in queue",
+
+    "ux.queued_playlist.title.live": "Queued playlist",
+    "ux.queued_playlist.title.cached": "Queued playlist (offline metadata)",
+    "ux.queued_playlist.description": "**%{title}** — %{count} tracks (%{duration})",
+    "ux.queued_playlist.footer.live": "requested by %{requester}",
+    "ux.queued_playlist.footer.failed_suffix": "%{footer} · %{count} tracks could not be loaded",
+    "ux.queued_playlist.footer.cached": "yt-dlp could not refresh; using cache from %{when}%{suffix}. Tracks may fail individually.",
+    "ux.queued_playlist.footer.cached_when_earlier": "earlier",
+    "ux.queued_playlist.footer.cached_stale_suffix": " (snapshot is over 24h old)",
+
+    "ux.np.title.playing": "Now playing",
+    "ux.np.title.paused": "Paused",
+    "ux.np.title.idle": "Idle",
+    "ux.np.description.title_link": "[**%{title}**](%{url})",
+    "ux.np.line.playing": "[**%{title}**](%{url}) — %{position} / %{duration}",
+    "ux.np.line.paused": "[**%{title}**](%{url}) — %{position} / %{duration} (paused)",
+    "ux.np.field.progress.name": "Progress",
+    "ux.np.field.progress.value": "%{position} / %{duration}",
+    "ux.np.field.up_next.name": "Up next",
+    "ux.np.field.up_next.value": {
+      "zero": "empty",
+      "one": "1 track",
+      "many": "%{count} tracks"
+    },
+    "ux.np.footer.by_uploader": "by %{uploader}",
+    "ux.np.idle.description": "No tracks playing. Use /play to queue something.",
+
+    "ux.queue.title": {
+      "one": "Queue (1 track · %{duration})",
+      "many": "Queue (%{count} tracks · %{duration})"
+    },
+    "ux.queue.title_with_page": "%{title} — page %{page}/%{total_pages}",
+    "ux.queue.description.with_body": "Now: %{line}\n\n%{body}",
+    "ux.queue.description.now_only": "Now: %{line}",
+    "ux.queue.entry": "%{idx}. [%{title}](%{url}) — %{duration} (req. by <@%{requester_id}>)",
+
+    "ux.recent.title": "Recently played (%{count})",
+    "ux.recent.entry": "%{idx}. [%{title}](%{url}) — %{duration}",
+    "ux.recent.overflow": {
+      "one": "… and 1 more",
+      "many": "… and %{count} more"
+    },
+    "ux.recent.footer": "Use /replay <position> to re-queue."
   }
 }

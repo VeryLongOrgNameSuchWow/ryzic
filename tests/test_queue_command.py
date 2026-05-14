@@ -195,6 +195,7 @@ def test_embed_title_counts_only_queued_tracks() -> None:
             (make_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=180_000), 222),
             (make_track_info(video_id="bbbbbbbbbbb", title="B", duration_ms=120_000), 333),
         ],
+        locale="en_US",
     )
     # 2 queued tracks; 180+120 = 300_000 ms = 5:00.
     assert embed.title == "Queue (2 tracks · 5:00)"
@@ -207,6 +208,7 @@ def test_embed_title_pluralizes_correctly_for_singular_track() -> None:
         now_playing_position_ms=0,
         paused=False,
         queue=[(make_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=60_000), 222)],
+        locale="en_US",
     )
     assert embed.title == "Queue (1 track · 1:00)"
 
@@ -217,6 +219,7 @@ def test_embed_now_hint_shows_progress_and_link() -> None:
         now_playing_position_ms=60_000,
         paused=False,
         queue=[],
+        locale="en_US",
     )
     body = embed.description or ""
     assert body.startswith("Now: [**Now**](https://www.youtube.com/watch?v=dQw4w9WgXcQ)")
@@ -230,6 +233,7 @@ def test_embed_now_hint_appends_paused() -> None:
         now_playing_position_ms=60_000,
         paused=True,
         queue=[],
+        locale="en_US",
     )
     body = embed.description or ""
     assert "1:00 / 3:00 (paused)" in body
@@ -241,6 +245,7 @@ def test_embed_description_is_only_the_now_hint_when_queue_empty() -> None:
         now_playing_position_ms=0,
         paused=False,
         queue=[],
+        locale="en_US",
     )
     body = embed.description or ""
     assert body.startswith("Now: ")
@@ -257,6 +262,7 @@ def test_embed_description_lists_queued_entries_with_requester_mention() -> None
             (make_track_info(video_id="aaaaaaaaaaa", title="A", duration_ms=60_000), 222),
             (make_track_info(video_id="bbbbbbbbbbb", title="B", duration_ms=120_000), 333),
         ],
+        locale="en_US",
     )
     body = embed.description or ""
     assert "1. [A](https://www.youtube.com/watch?v=aaaaaaaaaaa) — 1:00 (req. by <@222>)" in body
@@ -276,6 +282,7 @@ def test_embed_description_page_one_lists_first_ten_entries() -> None:
         queue=queue,
         page=1,
         total_pages=2,
+        locale="en_US",
     )
     body = embed.description or ""
     # 1..10 visible, 11..15 deferred to page 2.
@@ -301,6 +308,7 @@ def test_embed_description_page_two_lists_continuation_with_global_indices() -> 
         queue=queue,
         page=2,
         total_pages=2,
+        locale="en_US",
     )
     body = embed.description or ""
     assert "11. [T10]" in body
@@ -321,6 +329,7 @@ def test_embed_title_omits_page_suffix_for_single_page_queues() -> None:
         now_playing_position_ms=0,
         paused=False,
         queue=queue,
+        locale="en_US",
     )
     title = embed.title or ""
     assert "page" not in title
@@ -338,6 +347,7 @@ def test_embed_description_escapes_markdown_in_titles() -> None:
                 222,
             ),
         ],
+        locale="en_US",
     )
     body = embed.description or ""
     assert "\\*\\*hostile\\*\\*" in body
