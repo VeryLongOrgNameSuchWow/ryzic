@@ -483,8 +483,9 @@ async def test_no_url_routes_to_resume_when_paused(cache: Any) -> None:
     assert ctx.responses == []
 
 
-async def test_no_url_with_nothing_playing_returns_url_hint(cache: Any) -> None:
-    """``/play`` with empty url + nothing playing → ephemeral URL hint."""
+@pytest.mark.parametrize("url", ["", "   ", "\t", " \n "])
+async def test_no_url_with_nothing_playing_returns_url_hint(url: str, cache: Any) -> None:
+    """Bare-or-whitespace ``/play`` + nothing playing → ephemeral URL hint."""
     bot = _bot_in_voice_with(user_channel_id=999)
     ctx = _FakeContext(bot)
     ll, _ = _ll_with_one_node()
@@ -493,7 +494,7 @@ async def test_no_url_with_nothing_playing_returns_url_hint(cache: Any) -> None:
 
     resume_mock = AsyncMock(side_effect=AssertionError("_handle_resume must not run"))
     with patch.object(play_module, "_handle_resume", resume_mock):
-        await play_module._handle_play(cast(lightbulb.Context, ctx), "")
+        await play_module._handle_play(cast(lightbulb.Context, ctx), url)
 
     resume_mock.assert_not_awaited()
     assert ctx.responses[0][0] == t("play.error.no_url_and_nothing_playing", locale="en_US")
