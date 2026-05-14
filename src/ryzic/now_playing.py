@@ -47,11 +47,22 @@ _log = logging.getLogger(__name__)
 BUTTON_PAUSE = "ryzic:np:pause"
 BUTTON_RESUME = "ryzic:np:resume"
 BUTTON_SKIP = "ryzic:np:skip"
+# custom_id wire-compat preserved per #147; user-visible label is "Leave"
+# (see ``_LABEL_LEAVE`` below). Existing controller embeds posted before
+# the label rename remain dispatchable.
 BUTTON_STOP = "ryzic:np:stop"
 
 # All of our custom_ids share this prefix; the interaction listener
 # filters with ``startswith`` to short-circuit cheap.
 _CUSTOM_ID_PREFIX = "ryzic:np:"
+
+# Module-import-time button labels — locale is hard-coded en_US because
+# controller renders are event-driven (no ctx). Same shape as the wave's
+# Option A pattern for slash-command descriptions.
+_LABEL_PAUSE = t("controller.button.pause", locale="en_US")
+_LABEL_RESUME = t("controller.button.resume", locale="en_US")
+_LABEL_SKIP = t("controller.button.skip", locale="en_US")
+_LABEL_LEAVE = t("controller.button.leave", locale="en_US")
 
 
 # Per-guild ``(channel_id, message_id)`` of the active controller. Module
@@ -85,19 +96,19 @@ def _build_components() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SECONDARY,
         BUTTON_PAUSE,
         emoji="⏸️",  # ⏸
-        label=t("controller.button.pause", locale="en_US"),
+        label=_LABEL_PAUSE,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",  # ⏭
-        label=t("controller.button.skip", locale="en_US"),
+        label=_LABEL_SKIP,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.DANGER,
         BUTTON_STOP,
         emoji="⏹️",  # ⏹
-        label=t("controller.button.leave", locale="en_US"),
+        label=_LABEL_LEAVE,
     )
     return [row]
 
@@ -109,19 +120,19 @@ def _build_components_paused() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SUCCESS,
         BUTTON_RESUME,
         emoji="▶️",  # ▶
-        label=t("controller.button.resume", locale="en_US"),
+        label=_LABEL_RESUME,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",  # ⏭
-        label=t("controller.button.skip", locale="en_US"),
+        label=_LABEL_SKIP,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.DANGER,
         BUTTON_STOP,
         emoji="⏹️",  # ⏹
-        label=t("controller.button.leave", locale="en_US"),
+        label=_LABEL_LEAVE,
     )
     return [row]
 
@@ -133,21 +144,21 @@ def _build_idle_components() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SECONDARY,
         BUTTON_PAUSE,
         emoji="⏸️",
-        label=t("controller.button.pause", locale="en_US"),
+        label=_LABEL_PAUSE,
         is_disabled=True,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",
-        label=t("controller.button.skip", locale="en_US"),
+        label=_LABEL_SKIP,
         is_disabled=True,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_STOP,
         emoji="⏹️",
-        label=t("controller.button.leave", locale="en_US"),
+        label=_LABEL_LEAVE,
         is_disabled=True,
     )
     return [row]
