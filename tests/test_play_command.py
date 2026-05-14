@@ -308,7 +308,7 @@ async def test_unsupported_url_rejected_before_io(url: str) -> None:
     bot = _FakeBot()
     ctx = _FakeContext(bot)
     await play_module._handle_play(cast(lightbulb.Context, ctx), url)
-    assert ctx.responses[0][0] == t("play.error.unsupported_url", locale="en_US")
+    assert ctx.responses[0][0] == t("ytdlp.error.unsupported_url", locale="en_US")
     assert ctx.responses[0][0] == "Only YouTube URLs are supported."
 
 
@@ -402,34 +402,50 @@ async def test_bot_in_different_channel_rejected_with_mention(cache: Any) -> Non
 
 
 # ---------------------------------------------------------------------------
-# yt-dlp friendly error mapping (verbatim from FetchFailed.args[0])
+# yt-dlp friendly error mapping (rendered from FetchFailed.key + vars)
 # ---------------------------------------------------------------------------
 
 
-async def test_friendly_yt_dlp_error_passes_through_verbatim(cache: Any) -> None:
+async def test_friendly_yt_dlp_error_renders_from_key(cache: Any) -> None:
     bot = _bot_in_voice_with(user_channel_id=999)
     ctx = _FakeContext(bot)
     ll, _ = _ll_with_one_node()
     lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
 
-    msg = "That video is age-restricted and can't be played."
     with patch.object(
         play_module.ytdlp,
         "resolve_track",
-        side_effect=FetchFailed(msg),
+        side_effect=FetchFailed("ytdlp.error.age_restricted"),
     ):
         await play_module._handle_play(
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
-    assert ctx.responses[0][0] == msg
+    assert ctx.responses[0][0] == t("ytdlp.error.age_restricted", locale="en_US")
+    assert ctx.responses[0][0] == "That video is age-restricted and can't be played."
 
 
-async def test_friendly_message_falls_back_when_args_empty() -> None:
-    assert play_module._friendly_message(FetchFailed()) == t(
-        "play.error.could_not_load_url", locale="en_US"
+async def test_friendly_message_renders_key_at_locale() -> None:
+    exc = FetchFailed("ytdlp.error.age_restricted")
+    rendered = play_module._friendly_message(exc, "en_US")
+    assert rendered == t("ytdlp.error.age_restricted", locale="en_US")
+    assert rendered == "That video is age-restricted and can't be played."
+
+
+async def test_friendly_message_interpolates_vars() -> None:
+    exc = FetchFailed("ytdlp.error.generic_with_detail", detail="boom")
+    assert (
+        play_module._friendly_message(exc, "en_US")
+        == "Could not load that URL. yt-dlp said: `boom`"
     )
-    assert play_module._friendly_message(FetchFailed()) == "Could not load that URL."
+
+
+def test_fetch_failed_args_contain_en_rendering() -> None:
+    """``args[0]`` carries the en-US rendering so log/repr stays readable."""
+    exc = FetchFailed("ytdlp.error.private")
+    assert str(exc) == "That video is private."
+    exc_var = FetchFailed("ytdlp.error.generic_with_detail", detail="boom")
+    assert str(exc_var) == "Could not load that URL. yt-dlp said: `boom`"
 
 
 # ---------------------------------------------------------------------------
@@ -875,13 +891,14 @@ async def test_playlist_yt_dlp_total_failure_returns_friendly(cache: Any) -> Non
     with patch.object(
         play_module.playlist_cache,
         "fetch_with_fallback",
-        AsyncMock(side_effect=FetchFailed("That playlist is private.")),
+        AsyncMock(side_effect=FetchFailed("ytdlp.error.private")),
     ):
         await play_module._handle_play(
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/playlist?list=PL12345abcde",
         )
-    assert ctx.responses[0][0] == "That playlist is private."
+    assert ctx.responses[0][0] == t("ytdlp.error.private", locale="en_US")
+    assert ctx.responses[0][0] == "That video is private."
 
 
 async def test_playlist_voice_handshake_timeout(cache: Any) -> None:
@@ -1003,7 +1020,7 @@ async def test_yt_dlp_download_failure_per_track_drops_track(cache: Any) -> None
         patch.object(
             audio_cache.AudioCache,
             "get_or_download",
-            AsyncMock(side_effect=FetchFailed("download bonk")),
+            AsyncMock(side_effect=FetchFailed("ytdlp.error.generic_with_detail", detail="bonk")),
         ),
         patch.object(
             lavalink_glue,

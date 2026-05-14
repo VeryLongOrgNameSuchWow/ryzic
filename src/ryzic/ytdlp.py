@@ -36,22 +36,18 @@ _VIDEO_ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
 # and intentionally excluded.
 _LIVE_STATUSES: Final = frozenset({"is_live", "is_upcoming"})
 
-_LIVESTREAM_MESSAGE: Final = "Livestreams are not supported in this version."
-_UNSUPPORTED_URL_MESSAGE: Final = "Only YouTube URLs are supported."
-
-# User-facing sentences per M1 §3. Exact strings are part of the
-# wrapper's contract: ``/play`` displays them verbatim. Substring-matched
-# against the first line of yt-dlp's ``DownloadError``.
-_FRIENDLY_ERRORS: Final[dict[str, str]] = {
-    "Sign in to confirm your age": "That video is age-restricted and can't be played.",
-    "Private video": "That video is private.",
-    "Video unavailable": "That video is not available in this region.",
+# Substring → catalog-key mapping. The first line of yt-dlp's
+# ``DownloadError`` is scanned; the matching key feeds ``FetchFailed``.
+# Catalog body owns the user-facing copy (per the i18n migration); the
+# substrings stay verbatim — they're matched against yt-dlp's raw output.
+_FRIENDLY_ERROR_KEYS: Final[dict[str, str]] = {
+    "Sign in to confirm your age": "ytdlp.error.age_restricted",
+    "Private video": "ytdlp.error.private",
+    "Video unavailable": "ytdlp.error.region_blocked",
     # ``resolve_track`` / ``resolve_playlist`` skip format selection
     # (``process=False``); livestreams are caught by ``_is_livestream``.
     # This now surfaces only from ``download()`` — a real codec problem.
-    "Requested format is not available": (
-        "This track's audio format isn't available right now (likely a YouTube-side change)."
-    ),
+    "Requested format is not available": "ytdlp.error.format_unavailable",
 }
 
 # Cap and scrub yt-dlp error fragments before they surface to users.
@@ -211,7 +207,7 @@ def _scrub(text: str) -> str:
 def _track_from_info(info: dict[str, Any]) -> TrackInfo:
     video_id = info.get("id")
     if not isinstance(video_id, str):
-        raise FetchFailed("yt-dlp returned no video id")
+        raise FetchFailed("ytdlp.error.no_video_id")
     validate_video_id(video_id)
     return TrackInfo(
         video_id=video_id,
@@ -249,7 +245,7 @@ def _sync_extract(
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=download, process=process)
         if info is None:
-            raise FetchFailed("yt-dlp returned no info")
+            raise FetchFailed("ytdlp.error.no_info")
         # yt-dlp ships no type stubs, so ty sees the return as ``Any``.
         return ydl.sanitize_info(info)  # type: ignore[no-any-return]
 
@@ -274,27 +270,26 @@ async def _extract(
             (s for s in (line.strip() for line in str(exc).splitlines()) if s),
             str(exc).strip(),
         )
-        scrubbed = _scrub(detail)
-        friendly = next((m for n, m in _FRIENDLY_ERRORS.items() if n in detail), None)
-        if friendly is None:
-            friendly = f"Could not load that URL. yt-dlp said: `{scrubbed}`"
-        raise FetchFailed(friendly) from exc
+        key = next((k for substr, k in _FRIENDLY_ERROR_KEYS.items() if substr in detail), None)
+        if key is None:
+            raise FetchFailed("ytdlp.error.generic_with_detail", detail=_scrub(detail)) from exc
+        raise FetchFailed(key) from exc
     except Exception as exc:
         _log.exception("yt-dlp internal error for url=%s", url)
-        raise FetchFailed(f"internal error: {exc.__class__.__name__}") from exc
+        raise FetchFailed("ytdlp.error.internal", name=exc.__class__.__name__) from exc
 
 
 async def resolve_track(url: str, *, cache_root: Path) -> TrackInfo:
     """Resolve a single-video URL to a :class:`TrackInfo`."""
     if not is_supported_url(url):
-        raise FetchFailed(_UNSUPPORTED_URL_MESSAGE)
+        raise FetchFailed("ytdlp.error.unsupported_url")
     opts = _base_opts()
     # ``process=False`` skips format selection; the bestaudio fallback chain
     # is irrelevant on info-extract and triggers spurious "Requested format is
     # not available" errors for some VODs (issue #132).
     info = await _extract(opts, url, download=False, process=False)
     if _is_livestream(info):
-        raise FetchFailed(_LIVESTREAM_MESSAGE)
+        raise FetchFailed("ytdlp.error.livestream")
     return _track_from_info(info)
 
 
@@ -306,14 +301,14 @@ async def resolve_playlist(url: str, *, cache_root: Path) -> PlaylistInfo:
     resolution time.
     """
     if not is_supported_url(url):
-        raise FetchFailed(_UNSUPPORTED_URL_MESSAGE)
+        raise FetchFailed("ytdlp.error.unsupported_url")
     opts = _base_opts()
     opts["noplaylist"] = False
     opts["extract_flat"] = True
     info = await _extract(opts, url, download=False, process=False)
     playlist_id = info.get("id")
     if not isinstance(playlist_id, str):
-        raise FetchFailed("yt-dlp returned no playlist id")
+        raise FetchFailed("ytdlp.error.no_playlist_id")
     raw_entries = info.get("entries") or []
     entries = [
         track
@@ -340,7 +335,7 @@ async def download(url: str, dest: Path, *, cache_root: Path) -> None:
     O_NOFOLLOW-style guards are deferred to the cache subsystem (PR3b).
     """
     if not is_supported_url(url):
-        raise FetchFailed(_UNSUPPORTED_URL_MESSAGE)
+        raise FetchFailed("ytdlp.error.unsupported_url")
     resolved_root = cache_root.resolve()
     resolved_dest = dest.resolve()
     try:
@@ -352,4 +347,4 @@ async def download(url: str, dest: Path, *, cache_root: Path) -> None:
     opts["outtmpl"] = str(resolved_dest)
     info = await _extract(opts, url, download=True)
     if _is_livestream(info):
-        raise FetchFailed(_LIVESTREAM_MESSAGE)
+        raise FetchFailed("ytdlp.error.livestream")

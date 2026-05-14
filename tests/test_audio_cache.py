@@ -274,7 +274,7 @@ async def test_download_failure_cleans_tmp_and_raises(cache: AudioCache) -> None
     async def failing_download(url: str, dest: Path, *, cache_root: Path) -> None:
         # Simulate yt-dlp writing partial bytes before exploding.
         dest.write_bytes(b"partial")
-        raise FetchFailed("boom")
+        raise FetchFailed("ytdlp.error.generic_with_detail", detail="boom")
 
     with (
         patch.object(audio_cache, "download", side_effect=failing_download),
