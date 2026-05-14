@@ -23,7 +23,7 @@ import lightbulb
 
 from .. import audio_cache, lavalink_glue, playlist_cache, ux, ytdlp
 from ..errors import FetchFailed, InvalidVideoID
-from ..i18n import t
+from ..i18n import locale_for_ephemeral, locale_for_public, t
 from ..url_validator import is_supported_url
 
 _log = logging.getLogger(__name__)
@@ -39,18 +39,12 @@ _QUEUE_CAP: int = 500
 # to a friendly ephemeral rather than an opaque ``RuntimeError``.
 _VOICE_READY_TIMEOUT_S: float = 5.0
 
-# M1 §3: a single user-facing string covers every "the audio plumbing
-# isn't ready" failure (missing cache, missing lavalink client, no
-# available nodes, voice handshake timeout). Users don't distinguish
-# the layers — and a single string keeps the failure surface small.
-_AUDIO_SERVICE_DOWN: str = "Audio service is down. Try again in a minute."
-
 
 @loader.command
 class Play(
     lightbulb.SlashCommand,
     name="play",
-    description="Queue a YouTube track or playlist URL.",
+    description=t("play.command.description", locale="en_US"),
     # ``contexts=[GUILD]`` is the lightbulb v3 / Discord-API replacement
     # for the v2 ``dm_enabled=False``: the command is hidden from DMs
     # at the slash-command picker level. The guild_id None guard inside
@@ -59,7 +53,7 @@ class Play(
 ):
     url = lightbulb.string(
         "url",
-        "YouTube video or playlist URL.",
+        t("play.param.url.description", locale="en_US"),
         min_length=1,
         max_length=500,
     )
@@ -81,13 +75,20 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
         # ``contexts=[GUILD]`` should already prevent this, but if a
         # future re-registration drops the constraint we fail safe.
         await ctx.respond(
-            t("voice.error.run_in_server", locale="en_US", command="play"),
+            t(
+                "voice.error.run_in_server",
+                locale=locale_for_ephemeral(ctx),
+                command=ctx.command_data.name,
+            ),
             ephemeral=True,
         )
         return
 
     if not is_supported_url(url):
-        await ctx.respond("Only YouTube URLs are supported.", ephemeral=True)
+        await ctx.respond(
+            t("play.error.unsupported_url", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     cache = audio_cache.get_audio_cache()
@@ -97,13 +98,19 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
     # missing client. Both surface as the same friendly message — users
     # don't care which layer is asleep.
     if cache is None or ll_client is None or not ll_client.node_manager.available_nodes:
-        await ctx.respond(_AUDIO_SERVICE_DOWN, ephemeral=True)
+        await ctx.respond(
+            t("play.error.audio_service_down", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     bot = cast(hikari.GatewayBot, ctx.client.app)
     user_state = bot.cache.get_voice_state(guild_id, ctx.user.id)
     if user_state is None or user_state.channel_id is None:
-        await ctx.respond("Join a voice channel first.", ephemeral=True)
+        await ctx.respond(
+            t("play.error.join_voice_first", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
     user_channel_id = int(user_state.channel_id)
 
@@ -114,7 +121,7 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
     # blocking legitimate /play attempts on cold caches.
     if user_channel is not None and user_channel.type == hikari.ChannelType.GUILD_STAGE:
         await ctx.respond(
-            "Stage channels aren't supported. Use a regular voice channel.",
+            t("play.error.stage_unsupported", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
@@ -128,7 +135,11 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
             and int(bot_state.channel_id) != user_channel_id
         ):
             await ctx.respond(
-                f"I'm already playing in <#{int(bot_state.channel_id)}>. Join that channel.",
+                t(
+                    "play.error.bot_in_other_channel",
+                    locale=locale_for_ephemeral(ctx),
+                    channel_id=int(bot_state.channel_id),
+                ),
                 ephemeral=True,
             )
             return
@@ -242,7 +253,12 @@ async def _play_single(
         if cached_path is not None:
             await cache.release(track_info.video_id)
         await ctx.respond(
-            f"Queue is full ({len(player.queue)}/{_QUEUE_CAP}). Wait for some tracks to finish.",
+            t(
+                "play.error.queue_full",
+                locale=locale_for_ephemeral(ctx),
+                count=len(player.queue),
+                cap=_QUEUE_CAP,
+            ),
             ephemeral=True,
         )
         return
@@ -253,7 +269,7 @@ async def _play_single(
     audio_track = await _load_one(cache, ll_client, track_info, cached_path=cached_path)
     if audio_track is None:
         await ctx.respond(
-            "Could not load that track. Try a different URL.",
+            t("play.error.could_not_load_track", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
@@ -261,7 +277,10 @@ async def _play_single(
     await bot.update_voice_state(guild_id, channel_id, self_deaf=True)
     if not await lavalink_glue.wait_for_voice_ready(guild_id, timeout=_VOICE_READY_TIMEOUT_S):
         await cache.release(track_info.video_id)
-        await ctx.respond(_AUDIO_SERVICE_DOWN, ephemeral=True)
+        await ctx.respond(
+            t("play.error.audio_service_down", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     was_playing = player.is_playing
@@ -280,7 +299,7 @@ async def _play_single(
         playing_now=not was_playing,
         channel_id=channel_id,
         requester_id=ctx.user.id,
-        locale="en_US",
+        locale=locale_for_public(ctx),
     )
     await ctx.respond(embed=embed)
 
@@ -304,14 +323,22 @@ async def _play_playlist(
         return
 
     if not info.entries:
-        await ctx.respond("That playlist is empty or private.", ephemeral=True)
+        await ctx.respond(
+            t("play.error.playlist_empty_or_private", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     player = ll_client.player_manager.create(guild_id=guild_id)
     incoming = len(info.entries)
     if len(player.queue) + incoming > _QUEUE_CAP:
         await ctx.respond(
-            f"Queue is full ({len(player.queue)}/{_QUEUE_CAP}). Wait for some tracks to finish.",
+            t(
+                "play.error.queue_full",
+                locale=locale_for_ephemeral(ctx),
+                count=len(player.queue),
+                cap=_QUEUE_CAP,
+            ),
             ephemeral=True,
         )
         return
@@ -331,7 +358,7 @@ async def _play_playlist(
 
     if first_audio_track is None:
         await ctx.respond(
-            "Could not load any tracks from that playlist.",
+            t("play.error.playlist_all_failed", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
@@ -339,7 +366,10 @@ async def _play_playlist(
     await bot.update_voice_state(guild_id, channel_id, self_deaf=True)
     if not await lavalink_glue.wait_for_voice_ready(guild_id, timeout=_VOICE_READY_TIMEOUT_S):
         await cache.release(info.entries[first_index].video_id)
-        await ctx.respond(_AUDIO_SERVICE_DOWN, ephemeral=True)
+        await ctx.respond(
+            t("play.error.audio_service_down", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     was_playing = player.is_playing
@@ -365,7 +395,7 @@ async def _play_playlist(
         fetched_at=fetched_at if used_cache else None,
         cache_is_stale=cache_is_stale,
         failed_count=incoming - enqueued,
-        locale="en_US",
+        locale=locale_for_public(ctx),
     )
     await ctx.respond(embed=embed)
 
@@ -378,4 +408,4 @@ def _friendly_message(exc: FetchFailed) -> str:
     """
     if exc.args and isinstance(exc.args[0], str) and exc.args[0]:
         return exc.args[0]
-    return "Could not load that URL."
+    return t("play.error.could_not_load_url", locale="en_US")
