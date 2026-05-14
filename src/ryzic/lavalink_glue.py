@@ -469,6 +469,7 @@ class EventHandler:
             return
         from . import now_playing
 
+        reconnect_message = _broadcast_t("lavalink.broadcast.node_reconnecting")
         notified: set[int] = set()
         for player in list(client.player_manager.values()):
             guild_id = player.guild_id
@@ -479,11 +480,7 @@ class EventHandler:
             if guild_id in notified:
                 continue
             notified.add(guild_id)
-            await _send_to_last_play_channel(
-                self._bot,
-                guild_id,
-                _broadcast_t("lavalink.broadcast.node_reconnecting"),
-            )
+            await _send_to_last_play_channel(self._bot, guild_id, reconnect_message)
 
     @lavalink.listener(lavalink.NodeConnectedEvent)
     async def on_node_connected(self, event: lavalink.NodeConnectedEvent) -> None:
