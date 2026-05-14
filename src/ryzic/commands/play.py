@@ -42,9 +42,9 @@ _QUEUE_CAP: int = 500
 _VOICE_READY_TIMEOUT_S: float = 5.0
 
 # Per-guild record of "we've already shown the controller-button tip
-# in this session" (issue #152). Mirrors the in-memory lifetime of the
-# rest of the bot state — a restart wipes it and every guild re-learns
-# the buttons exist. Mutated only by :func:`_mark_tip_seen` and reset by
+# in this session". Mirrors the in-memory lifetime of the rest of the
+# bot state — a restart wipes it and every guild re-learns the buttons
+# exist. Mutated only by :func:`_mark_tip_seen` and reset by
 # :func:`_reset_state_for_test`.
 _seen_tip_guilds: set[int] = set()
 
@@ -60,6 +60,8 @@ def _should_show_first_play_tip(guild_id: int) -> bool:
 
 
 def _mark_tip_seen(guild_id: int) -> None:
+    """Mutation split from :func:`_should_show_first_play_tip` so callers
+    can mark only after ``ctx.respond`` succeeds."""
     _seen_tip_guilds.add(guild_id)
 
 
@@ -77,6 +79,23 @@ def _append_first_play_tip(embed: hikari.Embed, locale: str) -> None:
     prior = embed.footer.text if embed.footer and embed.footer.text else ""
     combined = f"{prior}\n{tip}" if prior else tip
     embed.set_footer(safe_truncate(combined, EMBED_FOOTER_MAX))
+
+
+async def _respond_with_first_play_tip(
+    ctx: lightbulb.Context, embed: hikari.Embed, guild_id: int, locale: str
+) -> None:
+    """Post ``embed`` and apply the first-play tip if the guild hasn't seen it.
+
+    Centralizes the mark-after-respond ordering: an exception during
+    ``ctx.respond`` leaves the guild un-marked so the next /play retries
+    the tip rather than silently swallowing it.
+    """
+    show_tip = _should_show_first_play_tip(guild_id)
+    if show_tip:
+        _append_first_play_tip(embed, locale)
+    await ctx.respond(embed=embed)
+    if show_tip:
+        _mark_tip_seen(guild_id)
 
 
 def _reset_state_for_test() -> None:
@@ -362,15 +381,7 @@ async def _play_single(
         requester_id=ctx.user.id,
         locale=locale,
     )
-    show_tip = _should_show_first_play_tip(guild_id)
-    if show_tip:
-        _append_first_play_tip(embed, locale)
-    await ctx.respond(embed=embed)
-    # Mark AFTER respond: a respond failure leaves the guild un-marked
-    # so the next /play retries the tip rather than silently swallowing
-    # the newcomer hint.
-    if show_tip:
-        _mark_tip_seen(guild_id)
+    await _respond_with_first_play_tip(ctx, embed, guild_id, locale)
 
 
 async def _play_playlist(
@@ -467,12 +478,7 @@ async def _play_playlist(
         failed_count=incoming - enqueued,
         locale=locale,
     )
-    show_tip = _should_show_first_play_tip(guild_id)
-    if show_tip:
-        _append_first_play_tip(embed, locale)
-    await ctx.respond(embed=embed)
-    if show_tip:
-        _mark_tip_seen(guild_id)
+    await _respond_with_first_play_tip(ctx, embed, guild_id, locale)
 
 
 def _friendly_message(exc: FetchFailed, locale: str) -> str:

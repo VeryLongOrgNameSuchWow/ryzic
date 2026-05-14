@@ -240,8 +240,8 @@ def _reset_module_state() -> None:
     audio_cache.set_audio_cache(None)
     lavalink_glue._reset_state_for_test()
     lavalink_glue._set_lavalink_client_for_test(None)
-    # Issue #152: per-guild first-play-tip tracking lives at module
-    # scope; reset so tests get a fresh "first play" world.
+    # Per-guild first-play-tip tracking lives at module scope; reset so
+    # tests get a fresh "first play" world.
     play_module._reset_state_for_test()
 
 
@@ -1223,8 +1223,6 @@ async def test_failed_play_does_not_mark_guild_seen(cache: Any) -> None:
         )
     # The failed /play used the error sentence, not an embed.
     assert isinstance(ctx_failed.responses[0][0], str)
-    # Reset the queue so the next /play can succeed (same guild_id=111).
-    player.queue = []
     ctx_after, _ = await _drive_successful_single_play(cache, guild_id=111)
     assert t("play.success.first_play_tip", locale="en_US") in _footer_text(ctx_after)
 
