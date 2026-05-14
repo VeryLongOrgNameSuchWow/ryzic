@@ -25,6 +25,7 @@ from .. import audio_cache, lavalink_glue, playlist_cache, ux, ytdlp
 from ..errors import FetchFailed, InvalidVideoID
 from ..i18n import locale_for_ephemeral, locale_for_public, t
 from ..url_validator import is_supported_url
+from ..ux import EMBED_FOOTER_MAX, safe_truncate
 from .resume import _handle_resume
 
 _log = logging.getLogger(__name__)
@@ -39,6 +40,48 @@ _QUEUE_CAP: int = 500
 # command-side guard exists so we can map "the gateway never confirmed"
 # to a friendly ephemeral rather than an opaque ``RuntimeError``.
 _VOICE_READY_TIMEOUT_S: float = 5.0
+
+# Per-guild record of "we've already shown the controller-button tip
+# in this session" (issue #152). Mirrors the in-memory lifetime of the
+# rest of the bot state — a restart wipes it and every guild re-learns
+# the buttons exist. Mutated only by :func:`_mark_tip_seen` and reset by
+# :func:`_reset_state_for_test`.
+_seen_tip_guilds: set[int] = set()
+
+
+def _should_show_first_play_tip(guild_id: int) -> bool:
+    """Return True the first time ``guild_id`` lands a successful /play.
+
+    Stateless check — mutation happens in :func:`_mark_tip_seen` after
+    the response is actually sent, so an exception during ``ctx.respond``
+    leaves the guild un-marked and the next /play retries the tip.
+    """
+    return guild_id not in _seen_tip_guilds
+
+
+def _mark_tip_seen(guild_id: int) -> None:
+    _seen_tip_guilds.add(guild_id)
+
+
+def _append_first_play_tip(embed: hikari.Embed, locale: str) -> None:
+    """Append the controller-button discovery tip to ``embed``'s footer.
+
+    The builders already populate a footer (uploader/duration for the
+    single-track embed; playlist provenance for the playlist embed) so
+    we concatenate rather than overwrite — the tip rides on a second
+    line under the existing copy. Re-applies :func:`safe_truncate` so a
+    pathologically long pre-existing footer can't push us past Discord's
+    2048-char ceiling.
+    """
+    tip = t("play.success.first_play_tip", locale=locale)
+    prior = embed.footer.text if embed.footer and embed.footer.text else ""
+    combined = f"{prior}\n{tip}" if prior else tip
+    embed.set_footer(safe_truncate(combined, EMBED_FOOTER_MAX))
+
+
+def _reset_state_for_test() -> None:
+    """Test-only: clear the per-guild first-play-tip tracking set."""
+    _seen_tip_guilds.clear()
 
 
 @loader.command
@@ -310,15 +353,24 @@ async def _play_single(
     # ``position`` is 1-indexed; new track sits at queue_len_before + 1
     # when something was already playing, otherwise it's been pulled
     # out of the queue and is the current track ("playing now").
+    locale = locale_for_public(ctx)
     embed = ux.build_queued_track_embed(
         track_info,
         position=queue_len_before + 1,
         playing_now=not was_playing,
         channel_id=channel_id,
         requester_id=ctx.user.id,
-        locale=locale_for_public(ctx),
+        locale=locale,
     )
+    show_tip = _should_show_first_play_tip(guild_id)
+    if show_tip:
+        _append_first_play_tip(embed, locale)
     await ctx.respond(embed=embed)
+    # Mark AFTER respond: a respond failure leaves the guild un-marked
+    # so the next /play retries the tip rather than silently swallowing
+    # the newcomer hint.
+    if show_tip:
+        _mark_tip_seen(guild_id)
 
 
 async def _play_playlist(
@@ -405,6 +457,7 @@ async def _play_playlist(
         enqueued += 1
 
     cache_is_stale = used_cache and playlist_cache.is_stale(fetched_at)
+    locale = locale_for_public(ctx)
     embed = ux.build_queued_playlist_embed(
         info,
         requester=ctx.user.username,
@@ -412,9 +465,14 @@ async def _play_playlist(
         fetched_at=fetched_at if used_cache else None,
         cache_is_stale=cache_is_stale,
         failed_count=incoming - enqueued,
-        locale=locale_for_public(ctx),
+        locale=locale,
     )
+    show_tip = _should_show_first_play_tip(guild_id)
+    if show_tip:
+        _append_first_play_tip(embed, locale)
     await ctx.respond(embed=embed)
+    if show_tip:
+        _mark_tip_seen(guild_id)
 
 
 def _friendly_message(exc: FetchFailed, locale: str) -> str:
