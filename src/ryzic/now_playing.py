@@ -211,6 +211,7 @@ async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: 
         position_ms=player.position,
         paused=player.paused,
         queue_length=len(player.queue),
+        locale="en_US",
     )
     components = _build_components_paused() if player.paused else _build_components()
     await _post_or_edit(bot, guild_id, channel_id, embed=embed, components=components)
@@ -218,7 +219,7 @@ async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: 
 
 async def _render_idle(bot: hikari.GatewayBot, guild_id: int, channel_id: int) -> None:
     """Render the 'queue empty / nothing playing' state with disabled buttons."""
-    embed = ux.build_now_playing_idle_embed()
+    embed = ux.build_now_playing_idle_embed(locale="en_US")
     await _post_or_edit(
         bot,
         guild_id,
@@ -292,7 +293,7 @@ async def teardown(bot: hikari.GatewayBot, guild_id: int) -> None:
         await bot.rest.edit_message(
             channel_id,
             message_id,
-            embed=ux.build_now_playing_idle_embed(),
+            embed=ux.build_now_playing_idle_embed(locale="en_US"),
             components=_build_idle_components(),
         )
     except hikari.NotFoundError:

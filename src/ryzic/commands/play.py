@@ -276,6 +276,7 @@ async def _play_single(
         playing_now=not was_playing,
         channel_id=channel_id,
         requester_id=ctx.user.id,
+        locale="en_US",
     )
     await ctx.respond(embed=embed)
 
@@ -360,6 +361,7 @@ async def _play_playlist(
         fetched_at=fetched_at if used_cache else None,
         cache_is_stale=cache_is_stale,
         failed_count=incoming - enqueued,
+        locale="en_US",
     )
     await ctx.respond(embed=embed)
 

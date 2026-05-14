@@ -105,5 +105,6 @@ async def _handle_queue(ctx: lightbulb.Context, *, page: int = 1, private: bool 
         queue=queue_entries,
         page=page,
         total_pages=total_pages,
+        locale="en_US",
     )
     await ctx.respond(embed=embed, ephemeral=private)

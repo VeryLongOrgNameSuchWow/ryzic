@@ -37,5 +37,5 @@ async def _handle_recent(ctx: lightbulb.Context) -> None:
         await ctx.respond("No tracks have played yet.", ephemeral=True)
         return
 
-    embed = ux.build_recent_embed(history)
+    embed = ux.build_recent_embed(history, locale="en_US")
     await ctx.respond(embed=embed)

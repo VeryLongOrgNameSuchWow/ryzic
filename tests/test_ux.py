@@ -176,6 +176,7 @@ def test_format_now_playing_line_shape() -> None:
         _track(title="Song", url="https://youtu.be/x", duration_ms=180_000),
         position_ms=60_000,
         paused=False,
+        locale="en_US",
     )
     assert line == "[**Song**](https://youtu.be/x) — 1:00 / 3:00"
 
@@ -185,6 +186,7 @@ def test_format_now_playing_line_appends_paused() -> None:
         _track(title="Song", duration_ms=180_000),
         position_ms=60_000,
         paused=True,
+        locale="en_US",
     )
     assert line.endswith(" — 1:00 / 3:00 (paused)")
 
@@ -194,6 +196,7 @@ def test_format_now_playing_line_escapes_markdown() -> None:
         _track(title="**hostile**", duration_ms=180_000),
         position_ms=0,
         paused=False,
+        locale="en_US",
     )
     assert "\\*\\*hostile\\*\\*" in line
 
@@ -203,6 +206,7 @@ def test_build_simple_now_playing_embed_includes_title_link_and_progress() -> No
         _track(title="Song", url="https://youtu.be/x", duration_ms=180_000),
         position_ms=30_000,
         paused=False,
+        locale="en_US",
     )
     assert embed.title == "Now playing"
     body = embed.description or ""
@@ -216,6 +220,7 @@ def test_build_simple_now_playing_embed_paused_indicator() -> None:
         _track(title="Song", duration_ms=180_000),
         position_ms=30_000,
         paused=True,
+        locale="en_US",
     )
     body = embed.description or ""
     assert "(paused)" in body
@@ -226,6 +231,7 @@ def test_build_simple_now_playing_embed_footer_carries_uploader() -> None:
         _track(title="Song", uploader="Some Channel"),
         position_ms=0,
         paused=False,
+        locale="en_US",
     )
     assert embed.footer is not None
     assert "Some Channel" in (embed.footer.text or "")
@@ -243,6 +249,7 @@ def test_track_embed_playing_now() -> None:
         playing_now=True,
         channel_id=999,
         requester_id=222,
+        locale="en_US",
     )
     assert isinstance(embed, hikari.Embed)
     assert embed.title == "Queued"
@@ -262,6 +269,7 @@ def test_track_embed_position_in_queue() -> None:
         playing_now=False,
         channel_id=999,
         requester_id=222,
+        locale="en_US",
     )
     assert embed.footer is not None
     text = embed.footer.text or ""
@@ -275,6 +283,7 @@ def test_track_embed_escapes_markdown_in_title_and_uploader() -> None:
         playing_now=False,
         channel_id=999,
         requester_id=222,
+        locale="en_US",
     )
     assert embed.description is not None
     # Both ``**`` and ``[`` get escaped — neither bold nor a markdown link
@@ -296,6 +305,7 @@ def test_track_embed_includes_channel_and_requester_fields() -> None:
         playing_now=True,
         channel_id=999,
         requester_id=222,
+        locale="en_US",
     )
     assert embed.fields is not None
     field_pairs = {f.name: (f.value, f.is_inline) for f in embed.fields}
@@ -323,6 +333,7 @@ def test_playlist_embed_live_path() -> None:
         used_cache=False,
         fetched_at=None,
         cache_is_stale=False,
+        locale="en_US",
     )
     assert embed.title == "Queued playlist"
     assert embed.description is not None
@@ -346,6 +357,7 @@ def test_playlist_embed_partial_failure_appends_footer_line() -> None:
         fetched_at=None,
         cache_is_stale=False,
         failed_count=3,
+        locale="en_US",
     )
     assert embed.footer is not None
     assert "3 tracks could not be loaded" in (embed.footer.text or "")
@@ -359,6 +371,7 @@ def test_playlist_embed_no_partial_footer_when_zero_failed() -> None:
         fetched_at=None,
         cache_is_stale=False,
         failed_count=0,
+        locale="en_US",
     )
     assert embed.footer is not None
     assert "could not be loaded" not in (embed.footer.text or "")
@@ -371,6 +384,7 @@ def test_playlist_embed_offline_metadata() -> None:
         used_cache=True,
         fetched_at=1234567890,
         cache_is_stale=False,
+        locale="en_US",
     )
     assert embed.title == "Queued playlist (offline metadata)"
     assert embed.footer is not None
@@ -387,6 +401,7 @@ def test_playlist_embed_offline_stale_warning() -> None:
         used_cache=True,
         fetched_at=1,
         cache_is_stale=True,
+        locale="en_US",
     )
     assert embed.footer is not None
     assert "snapshot is over 24h old" in (embed.footer.text or "")
@@ -399,6 +414,7 @@ def test_playlist_embed_escapes_markdown_in_title() -> None:
         used_cache=False,
         fetched_at=None,
         cache_is_stale=False,
+        locale="en_US",
     )
     assert embed.description is not None
     assert "**hax**" not in embed.description
@@ -415,7 +431,7 @@ def test_recent_embed_lists_tracks_in_order_and_counts() -> None:
         _track(video_id="aaaaaaaaaaa", title="Newest"),
         _track(video_id="bbbbbbbbbbb", title="Older"),
     ]
-    embed = ux.build_recent_embed(history)
+    embed = ux.build_recent_embed(history, locale="en_US")
 
     assert isinstance(embed, hikari.Embed)
     assert embed.title == "Recently played (2)"
@@ -428,7 +444,7 @@ def test_recent_embed_lists_tracks_in_order_and_counts() -> None:
 
 def test_recent_embed_escapes_markdown_in_titles() -> None:
     history = [_track(video_id="aaaaaaaaaaa", title="**evil** [link](http://x)")]
-    embed = ux.build_recent_embed(history)
+    embed = ux.build_recent_embed(history, locale="en_US")
 
     assert embed.description is not None
     assert "**evil**" not in embed.description
@@ -457,6 +473,7 @@ def test_now_playing_embed_pluralizes_up_next_label(queue_length: int, expected_
         position_ms=0,
         paused=False,
         queue_length=queue_length,
+        locale="en_US",
     )
     up_next_field = next(f for f in embed.fields if f.name == "Up next")
     assert up_next_field.value == expected_label

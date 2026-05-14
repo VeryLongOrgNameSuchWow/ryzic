@@ -25,6 +25,15 @@ via its ``extra`` dict so commands like ``/queue`` and ``/skip`` can render
 the original YouTube URL/title/uploader without re-resolving via yt-dlp.
 Lavalink's local source manager surfaces the file path in ``AudioTrack.uri``,
 which is unhelpful for embeds.
+
+**i18n contract.** Every public builder takes a ``locale: str`` keyword
+argument (required, no default). Strings live in the catalog at
+``src/ryzic/i18n/locales/{locale}.json``; the builder ``t()``-renders
+each catalog key at call time. Variables that interpolate inside a
+markdown structure (``**%{title}**``, ``[%{label}](%{url})``) are
+``escape_markdown``-sanitized at the call site before being passed to
+``t()`` — the catalog template owns the markdown wrappers and never sees
+unescaped user data.
 """
 
 from __future__ import annotations
@@ -35,6 +44,7 @@ from typing import Final
 import hikari
 import lavalink
 
+from .i18n import t
 from .ytdlp import PlaylistInfo, TrackInfo
 
 # Discord embed limits. Description and footer caps come from
@@ -173,6 +183,7 @@ def build_queued_track_embed(
     playing_now: bool,
     channel_id: int,
     requester_id: int,
+    locale: str,
 ) -> hikari.Embed:
     """Build the embed for a single-track ``/play`` success (M1 §3).
 
@@ -186,15 +197,37 @@ def build_queued_track_embed(
     """
     title = safe_truncate(escape_markdown(track.title), EMBED_DESCRIPTION_MAX // 2)
     uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
-    description = safe_truncate(f"[**{title}**]({track.url})", EMBED_DESCRIPTION_MAX)
+    description = safe_truncate(
+        t("ux.queued.description", locale=locale, title=title, url=track.url),
+        EMBED_DESCRIPTION_MAX,
+    )
     duration = format_duration(track.duration_ms)
     if playing_now:
-        footer = f"by {uploader} · {duration} · playing now"
+        footer = t(
+            "ux.queued.footer.playing_now",
+            locale=locale,
+            uploader=uploader,
+            duration=duration,
+        )
     else:
-        footer = f"by {uploader} · {duration} · position {position} in queue"
-    embed = hikari.Embed(title="Queued", description=description)
-    embed.add_field(name="Channel", value=f"<#{channel_id}>", inline=True)
-    embed.add_field(name="Requested by", value=f"<@{requester_id}>", inline=True)
+        footer = t(
+            "ux.queued.footer.in_queue",
+            locale=locale,
+            uploader=uploader,
+            duration=duration,
+            position=position,
+        )
+    embed = hikari.Embed(title=t("ux.queued.title", locale=locale), description=description)
+    embed.add_field(
+        name=t("ux.queued.field.channel.name", locale=locale),
+        value=f"<#{channel_id}>",
+        inline=True,
+    )
+    embed.add_field(
+        name=t("ux.queued.field.requested_by.name", locale=locale),
+        value=f"<@{requester_id}>",
+        inline=True,
+    )
     embed.set_footer(safe_truncate(footer, EMBED_FOOTER_MAX))
     return embed
 
@@ -207,6 +240,7 @@ def build_queued_playlist_embed(
     fetched_at: int | None,
     cache_is_stale: bool,
     failed_count: int = 0,
+    locale: str,
 ) -> hikari.Embed:
     """Build the embed for a playlist ``/play`` success (M1 §3).
 
@@ -225,24 +259,49 @@ def build_queued_playlist_embed(
     total_ms = sum(track.duration_ms for track in playlist.entries)
     duration = format_duration(total_ms)
     description = safe_truncate(
-        f"**{title}** — {track_count} tracks ({duration})",
+        t(
+            "ux.queued_playlist.description",
+            locale=locale,
+            title=title,
+            count=track_count,
+            duration=duration,
+        ),
         EMBED_DESCRIPTION_MAX,
     )
     if used_cache:
-        embed_title = "Queued playlist (offline metadata)"
-        when = "earlier" if fetched_at is None else _format_timestamp(fetched_at)
+        embed_title = t("ux.queued_playlist.title.cached", locale=locale)
+        when = (
+            t("ux.queued_playlist.footer.cached_when_earlier", locale=locale)
+            if fetched_at is None
+            else _format_timestamp(fetched_at)
+        )
         # Stale snapshots get a slightly louder mention so users notice
         # entries may have rotated; the fallback path itself is the same.
-        suffix = " (snapshot is over 24h old)" if cache_is_stale else ""
-        footer = (
-            f"yt-dlp could not refresh; using cache from {when}{suffix}. "
-            f"Tracks may fail individually."
+        suffix = (
+            t("ux.queued_playlist.footer.cached_stale_suffix", locale=locale)
+            if cache_is_stale
+            else ""
+        )
+        footer = t(
+            "ux.queued_playlist.footer.cached",
+            locale=locale,
+            when=when,
+            suffix=suffix,
         )
     else:
-        embed_title = "Queued playlist"
-        footer = f"requested by {requester}"
+        embed_title = t("ux.queued_playlist.title.live", locale=locale)
+        footer = t(
+            "ux.queued_playlist.footer.live",
+            locale=locale,
+            requester=requester,
+        )
         if failed_count > 0:
-            footer = f"{footer} · {failed_count} tracks could not be loaded"
+            footer = t(
+                "ux.queued_playlist.footer.failed_suffix",
+                locale=locale,
+                footer=footer,
+                count=failed_count,
+            )
     embed = hikari.Embed(title=embed_title, description=description)
     embed.set_footer(safe_truncate(footer, EMBED_FOOTER_MAX))
     return embed
@@ -287,6 +346,7 @@ def format_now_playing_line(
     position_ms: int,
     *,
     paused: bool,
+    locale: str,
 ) -> str:
     """One-line markdown summary of a now-playing track.
 
@@ -296,10 +356,17 @@ def format_now_playing_line(
     ``/queue`` top hint, future controller embed).
     """
     title = safe_truncate(escape_markdown(track.title), EMBED_FIELD_VALUE_MAX // 2)
-    progress = f"{format_duration(position_ms)} / {format_duration(track.duration_ms)}"
-    if paused:
-        progress = f"{progress} (paused)"
-    return f"[**{title}**]({track.url}) — {progress}"
+    position = format_duration(position_ms)
+    duration = format_duration(track.duration_ms)
+    key = "ux.np.line.paused" if paused else "ux.np.line.playing"
+    return t(
+        key,
+        locale=locale,
+        title=title,
+        url=track.url,
+        position=position,
+        duration=duration,
+    )
 
 
 def build_simple_now_playing_embed(
@@ -307,6 +374,7 @@ def build_simple_now_playing_embed(
     position_ms: int,
     *,
     paused: bool,
+    locale: str,
 ) -> hikari.Embed:
     """Build the ``/np`` embed for the currently-playing track.
 
@@ -316,11 +384,16 @@ def build_simple_now_playing_embed(
     so the controller and ``/np`` stay visually aligned is tracked as
     a follow-up; for now they diverge by design.
     """
-    raw_line = format_now_playing_line(track, position_ms, paused=paused)
+    raw_line = format_now_playing_line(track, position_ms, paused=paused, locale=locale)
     line = safe_truncate(raw_line, EMBED_DESCRIPTION_MAX)
     uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
-    embed = hikari.Embed(title="Now playing", description=line)
-    embed.set_footer(safe_truncate(f"by {uploader}", EMBED_FOOTER_MAX))
+    embed = hikari.Embed(title=t("ux.np.title.playing", locale=locale), description=line)
+    embed.set_footer(
+        safe_truncate(
+            t("ux.np.footer.by_uploader", locale=locale, uploader=uploader),
+            EMBED_FOOTER_MAX,
+        )
+    )
     return embed
 
 
@@ -332,6 +405,7 @@ def build_queue_embed(
     queue: list[tuple[TrackInfo, int]],
     page: int = 1,
     total_pages: int = 1,
+    locale: str,
 ) -> hikari.Embed:
     """Build the ``/queue`` embed (M1 §3, paging per issue #99).
 
@@ -348,14 +422,30 @@ def build_queue_embed(
     """
     queue_count = len(queue)
     queue_total_ms = sum(info.duration_ms for info, _ in queue)
-    plural = "" if queue_count == 1 else "s"
-    title = f"Queue ({queue_count} track{plural} · {format_duration(queue_total_ms)})"
+    title = t(
+        "ux.queue.title",
+        locale=locale,
+        count=queue_count,
+        duration=format_duration(queue_total_ms),
+    )
     if total_pages > 1:
-        title = f"{title} — page {page}/{total_pages}"
+        title = t(
+            "ux.queue.title_with_page",
+            locale=locale,
+            title=title,
+            page=page,
+            total_pages=total_pages,
+        )
 
-    now_line = format_now_playing_line(now_playing, now_playing_position_ms, paused=paused)
-    queue_body = _build_queue_description(queue, page=page)
-    description = f"Now: {now_line}\n\n{queue_body}" if queue_body else f"Now: {now_line}"
+    now_line = format_now_playing_line(
+        now_playing, now_playing_position_ms, paused=paused, locale=locale
+    )
+    queue_body = _build_queue_description(queue, page=page, locale=locale)
+    description = (
+        t("ux.queue.description.with_body", locale=locale, line=now_line, body=queue_body)
+        if queue_body
+        else t("ux.queue.description.now_only", locale=locale, line=now_line)
+    )
 
     return hikari.Embed(
         title=title,
@@ -363,7 +453,12 @@ def build_queue_embed(
     )
 
 
-def _build_queue_description(queue: list[tuple[TrackInfo, int]], *, page: int) -> str:
+def _build_queue_description(
+    queue: list[tuple[TrackInfo, int]],
+    *,
+    page: int,
+    locale: str,
+) -> str:
     """Format the queue-list portion of the ``/queue`` embed for ``page``.
 
     Returns the empty string when ``queue`` is empty so the caller can
@@ -378,16 +473,21 @@ def _build_queue_description(queue: list[tuple[TrackInfo, int]], *, page: int) -
     end = start + QUEUE_PAGE_SIZE
     page_slice = queue[start:end]
     lines = [
-        (
-            f"{idx}. [{escape_markdown(info.title)}]({info.url}) — "
-            f"{format_duration(info.duration_ms)} (req. by <@{requester_id}>)"
+        t(
+            "ux.queue.entry",
+            locale=locale,
+            idx=idx,
+            title=escape_markdown(info.title),
+            url=info.url,
+            duration=format_duration(info.duration_ms),
+            requester_id=requester_id,
         )
         for idx, (info, requester_id) in enumerate(page_slice, start=start + 1)
     ]
     return safe_truncate("\n".join(lines), EMBED_DESCRIPTION_MAX)
 
 
-def build_recent_embed(history: list[TrackInfo]) -> hikari.Embed:
+def build_recent_embed(history: list[TrackInfo], *, locale: str) -> hikari.Embed:
     """Build the ``/recent`` embed (issue #96).
 
     ``history`` is newest-first. Caller guarantees non-empty (the
@@ -397,18 +497,25 @@ def build_recent_embed(history: list[TrackInfo]) -> hikari.Embed:
     """
     preview = history[:_RECENT_PREVIEW_MAX]
     lines = [
-        (
-            f"{idx}. [{escape_markdown(info.title)}]({info.url}) — "
-            f"{format_duration(info.duration_ms)}"
+        t(
+            "ux.recent.entry",
+            locale=locale,
+            idx=idx,
+            title=escape_markdown(info.title),
+            url=info.url,
+            duration=format_duration(info.duration_ms),
         )
         for idx, info in enumerate(preview, start=1)
     ]
     overflow = len(history) - len(preview)
     if overflow > 0:
-        lines.append(f"… and {overflow} more")
+        lines.append(t("ux.recent.overflow", locale=locale, count=overflow))
     description = safe_truncate("\n".join(lines), EMBED_DESCRIPTION_MAX)
-    embed = hikari.Embed(title=f"Recently played ({len(history)})", description=description)
-    embed.set_footer("Use /replay <position> to re-queue.")
+    embed = hikari.Embed(
+        title=t("ux.recent.title", locale=locale, count=len(history)),
+        description=description,
+    )
+    embed.set_footer(t("ux.recent.footer", locale=locale))
     return embed
 
 
@@ -418,6 +525,7 @@ def build_now_playing_embed(
     position_ms: int,
     paused: bool,
     queue_length: int,
+    locale: str,
 ) -> hikari.Embed:
     """Build the persistent now-playing controller embed (issue #90).
 
@@ -426,25 +534,43 @@ def build_now_playing_embed(
     queue depth, not the full queue listing. Title swaps to "Paused"
     when the player is paused so the embed matches the button state.
     """
-    title = "Paused" if paused else "Now playing"
+    title = t(
+        "ux.np.title.paused" if paused else "ux.np.title.playing",
+        locale=locale,
+    )
     safe_title = safe_truncate(escape_markdown(track.title), EMBED_DESCRIPTION_MAX // 2)
-    description = safe_truncate(f"[**{safe_title}**]({track.url})", EMBED_DESCRIPTION_MAX)
-    progress = f"{format_duration(position_ms)} / {format_duration(track.duration_ms)}"
+    description = safe_truncate(
+        t("ux.np.description.title_link", locale=locale, title=safe_title, url=track.url),
+        EMBED_DESCRIPTION_MAX,
+    )
+    progress = t(
+        "ux.np.field.progress.value",
+        locale=locale,
+        position=format_duration(position_ms),
+        duration=format_duration(track.duration_ms),
+    )
     embed = hikari.Embed(title=title, description=description)
-    embed.add_field(name="Progress", value=progress, inline=True)
-    if queue_length == 0:
-        queue_label = "empty"
-    elif queue_length == 1:
-        queue_label = "1 track"
-    else:
-        queue_label = f"{queue_length} tracks"
-    embed.add_field(name="Up next", value=queue_label, inline=True)
+    embed.add_field(
+        name=t("ux.np.field.progress.name", locale=locale),
+        value=progress,
+        inline=True,
+    )
+    embed.add_field(
+        name=t("ux.np.field.up_next.name", locale=locale),
+        value=t("ux.np.field.up_next.value", locale=locale, count=queue_length),
+        inline=True,
+    )
     uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
-    embed.set_footer(safe_truncate(f"by {uploader}", EMBED_FOOTER_MAX))
+    embed.set_footer(
+        safe_truncate(
+            t("ux.np.footer.by_uploader", locale=locale, uploader=uploader),
+            EMBED_FOOTER_MAX,
+        )
+    )
     return embed
 
 
-def build_now_playing_idle_embed() -> hikari.Embed:
+def build_now_playing_idle_embed(*, locale: str) -> hikari.Embed:
     """Build the post-queue idle embed for the now-playing controller (issue #90).
 
     Used after ``QueueEndEvent`` and ``/leave`` so the controller stops
@@ -452,6 +578,6 @@ def build_now_playing_idle_embed() -> hikari.Embed:
     the caller to reinforce the inactive state.
     """
     return hikari.Embed(
-        title="Idle",
-        description="No tracks playing. Use /play to queue something.",
+        title=t("ux.np.title.idle", locale=locale),
+        description=t("ux.np.idle.description", locale=locale),
     )
