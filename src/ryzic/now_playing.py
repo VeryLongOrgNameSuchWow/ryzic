@@ -1,8 +1,8 @@
 """Persistent now-playing controller embed (issue #90).
 
 A long-lived embed in the channel where ``/play`` was last invoked,
-showing the currently-playing track plus four media-remote buttons
-(pause/resume, skip, stop). Updates on every play/pause/resume/skip/end
+showing the currently-playing track plus three media-remote buttons
+(pause/resume, skip, leave). Updates on every play/pause/resume/skip/end
 so the channel always carries an accurate current-state surface.
 
 Channel choice follows :data:`lavalink_glue.last_play_channel`: the
@@ -35,6 +35,7 @@ import hikari
 import lavalink
 
 from . import lavalink_glue, ux
+from .i18n import t
 
 _log = logging.getLogger(__name__)
 
@@ -72,9 +73,9 @@ def is_known_message(guild_id: int, message_id: int) -> bool:
 
 
 def _build_components() -> list[hikari.api.MessageActionRowBuilder]:
-    """Build the 4-button media-remote row.
+    """Build the 3-button media-remote row.
 
-    Order matches the issue body's spec: pause/resume · skip · stop.
+    Order matches the issue body's spec: pause/resume · skip · leave.
     The pause/resume button surfaces both states behind one custom_id
     pair — the renderer picks which custom_id to bind based on player
     state, so the user always sees one of the two icons at a time.
@@ -84,19 +85,19 @@ def _build_components() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SECONDARY,
         BUTTON_PAUSE,
         emoji="⏸️",  # ⏸
-        label="Pause",
+        label=t("controller.button.pause", locale="en_US"),
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",  # ⏭
-        label="Skip",
+        label=t("controller.button.skip", locale="en_US"),
     )
     row.add_interactive_button(
         hikari.ButtonStyle.DANGER,
         BUTTON_STOP,
         emoji="⏹️",  # ⏹
-        label="Stop",
+        label=t("controller.button.leave", locale="en_US"),
     )
     return [row]
 
@@ -108,19 +109,19 @@ def _build_components_paused() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SUCCESS,
         BUTTON_RESUME,
         emoji="▶️",  # ▶
-        label="Resume",
+        label=t("controller.button.resume", locale="en_US"),
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",  # ⏭
-        label="Skip",
+        label=t("controller.button.skip", locale="en_US"),
     )
     row.add_interactive_button(
         hikari.ButtonStyle.DANGER,
         BUTTON_STOP,
         emoji="⏹️",  # ⏹
-        label="Stop",
+        label=t("controller.button.leave", locale="en_US"),
     )
     return [row]
 
@@ -132,21 +133,21 @@ def _build_idle_components() -> list[hikari.api.MessageActionRowBuilder]:
         hikari.ButtonStyle.SECONDARY,
         BUTTON_PAUSE,
         emoji="⏸️",
-        label="Pause",
+        label=t("controller.button.pause", locale="en_US"),
         is_disabled=True,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_SKIP,
         emoji="⏭️",
-        label="Skip",
+        label=t("controller.button.skip", locale="en_US"),
         is_disabled=True,
     )
     row.add_interactive_button(
         hikari.ButtonStyle.SECONDARY,
         BUTTON_STOP,
         emoji="⏹️",
-        label="Stop",
+        label=t("controller.button.leave", locale="en_US"),
         is_disabled=True,
     )
     return [row]

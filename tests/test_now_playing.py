@@ -10,6 +10,7 @@ import lavalink
 import pytest
 
 from ryzic import lavalink_glue, now_playing
+from ryzic.i18n import t
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeLavalinkClient,
@@ -114,7 +115,7 @@ async def test_upsert_idle_when_no_player() -> None:
 
     assert len(rest.create_calls) == 1
     embed: hikari.Embed = rest.create_calls[0]["embed"]
-    assert embed.title == "Idle"
+    assert embed.title == t("ux.np.title.idle", locale="en_US")
 
 
 async def test_upsert_idle_when_track_lacks_metadata() -> None:
@@ -132,7 +133,7 @@ async def test_upsert_idle_when_track_lacks_metadata() -> None:
 
     assert len(rest.create_calls) == 1
     embed: hikari.Embed = rest.create_calls[0]["embed"]
-    assert embed.title == "Idle"
+    assert embed.title == t("ux.np.title.idle", locale="en_US")
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +178,7 @@ async def test_refresh_edits_existing_controller_to_paused() -> None:
     assert edit["channel_id"] == 555
     assert edit["message_id"] == 9100
     embed: hikari.Embed = edit["embed"]
-    assert embed.title == "Paused"
+    assert embed.title == t("ux.np.title.paused", locale="en_US")
 
 
 async def test_refresh_renders_idle_when_player_clears() -> None:
@@ -196,7 +197,7 @@ async def test_refresh_renders_idle_when_player_clears() -> None:
     await now_playing.refresh(bot, 111)
 
     embed: hikari.Embed = rest.edit_calls[-1]["embed"]
-    assert embed.title == "Idle"
+    assert embed.title == t("ux.np.title.idle", locale="en_US")
 
 
 async def test_refresh_recovers_from_deleted_message_by_reposting() -> None:
@@ -254,7 +255,7 @@ async def test_teardown_finalizes_controller_to_idle_and_clears_record() -> None
     assert not now_playing.is_known_message(111, 9400)
     edit = rest.edit_calls[-1]
     embed: hikari.Embed = edit["embed"]
-    assert embed.title == "Idle"
+    assert embed.title == t("ux.np.title.idle", locale="en_US")
 
 
 async def test_teardown_swallows_not_found_when_message_already_gone() -> None:
@@ -329,3 +330,45 @@ async def test_lavalink_default_player_typing_uses_player_manager_get() -> None:
     assert cast_player is None  # nothing created yet
     cast_lavalink = cast(lavalink.Client, ll)
     assert cast_lavalink.player_manager.get(111) is None
+
+
+# ---------------------------------------------------------------------------
+# Button labels — #147 fold: Stop renamed to Leave
+# ---------------------------------------------------------------------------
+
+
+def _labels_in_row(row: hikari.api.MessageActionRowBuilder) -> list[str]:
+    """Extract button labels from an action-row builder via the build payload."""
+    payload, _ = row.build()
+    components = payload["components"]
+    return [comp["label"] for comp in components]
+
+
+def test_active_row_renders_pause_skip_leave_labels() -> None:
+    """#147 fold: the stop-styled button must read 'Leave', not 'Stop'."""
+    [row] = now_playing._build_components()
+    assert _labels_in_row(row) == [
+        t("controller.button.pause", locale="en_US"),
+        t("controller.button.skip", locale="en_US"),
+        t("controller.button.leave", locale="en_US"),
+    ]
+    assert "Leave" in _labels_in_row(row)
+    assert "Stop" not in _labels_in_row(row)
+
+
+def test_paused_row_renders_resume_skip_leave_labels() -> None:
+    [row] = now_playing._build_components_paused()
+    assert _labels_in_row(row) == [
+        t("controller.button.resume", locale="en_US"),
+        t("controller.button.skip", locale="en_US"),
+        t("controller.button.leave", locale="en_US"),
+    ]
+
+
+def test_idle_row_renders_pause_skip_leave_labels() -> None:
+    [row] = now_playing._build_idle_components()
+    assert _labels_in_row(row) == [
+        t("controller.button.pause", locale="en_US"),
+        t("controller.button.skip", locale="en_US"),
+        t("controller.button.leave", locale="en_US"),
+    ]

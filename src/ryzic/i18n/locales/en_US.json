@@ -113,6 +113,15 @@
     "play.error.could_not_load_track": "Could not load that track. Try a different URL.",
     "play.error.playlist_empty_or_private": "That playlist is empty or private.",
     "play.error.playlist_all_failed": "Could not load any tracks from that playlist.",
-    "play.error.could_not_load_url": "Could not load that URL."
+    "play.error.could_not_load_url": "Could not load that URL.",
+
+    "controller.button.pause": "Pause",
+    "controller.button.resume": "Resume",
+    "controller.button.skip": "Skip",
+    "controller.button.leave": "Leave",
+    "controller.error.unknown_button": "That button isn't wired up.",
+    "controller.error.guild_only": "Controller buttons only work in a server.",
+    "controller.error.stale_session": "This controller is from a previous session. Run /play to start a new one.",
+    "controller.error.handler_failed": "Something went wrong. Try the slash command directly."
   }
 }
