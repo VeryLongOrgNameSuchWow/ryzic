@@ -122,6 +122,12 @@
     "controller.error.unknown_button": "That button isn't wired up.",
     "controller.error.guild_only": "Controller buttons only work in a server.",
     "controller.error.stale_session": "This controller is from a previous session. Run /play to start a new one.",
-    "controller.error.handler_failed": "Something went wrong. Try the slash command directly."
+    "controller.error.handler_failed": "Something went wrong. Try the slash command directly.",
+
+    "lavalink.broadcast.auto_leave": "Idle for %{duration} — disconnecting.",
+    "lavalink.broadcast.voice_lost": "Voice connection lost. Queue cleared.",
+    "lavalink.broadcast.node_reconnecting": "Audio service disconnected. Reconnecting...",
+    "lavalink.broadcast.track_stuck": "Track **%{title}** got stuck and was skipped.",
+    "lavalink.broadcast.track_exception": "Track **%{title}** failed: %{detail}. Skipping."
   }
 }
