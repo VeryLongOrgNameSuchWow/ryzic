@@ -28,14 +28,27 @@ def _reset_state() -> None:
 
 async def test_dm_invocation_returns_friendly_error() -> None:
     bot = FakeBot()
-    ctx = context_for(bot, guild_id=None)
+    ctx = context_for(bot, guild_id=None, command_name="nowplaying")
 
     await np_module._handle_np(ctx)
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == t("voice.error.run_in_server", locale="en_US", command="np")
-    assert fake.responses[0][0] == "Run /np in a server."
+    assert fake.responses[0][0] == t(
+        "voice.error.run_in_server", locale="en_US", command="nowplaying"
+    )
+    assert fake.responses[0][0] == "Run /nowplaying in a server."
     assert fake.responses[0][1].get("ephemeral") is True
+
+
+async def test_dm_invocation_uses_command_name_dynamically() -> None:
+    """The ``/np`` alias surfaces the alias name in the error copy."""
+    bot = FakeBot()
+    ctx = context_for(bot, guild_id=None, command_name="np")
+
+    await np_module._handle_np(ctx)
+
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == "Run /np in a server."
 
 
 async def test_no_lavalink_client_returns_nothing_playing() -> None:
@@ -163,5 +176,16 @@ async def test_private_true_makes_response_ephemeral() -> None:
     assert isinstance(embed, hikari.Embed)
 
 
-def test_loader_registered_np_command() -> None:
-    assert np_module.NowPlaying._command_data.name == "np"
+def test_loader_registered_nowplaying_command() -> None:
+    """``/nowplaying`` is the primary surface registered by the loader."""
+    assert np_module.NowPlaying._command_data.name == "nowplaying"
+    assert np_module.NowPlaying._command_data.description == t(
+        "np.command.description", locale="en_US"
+    )
+    assert np_module.NowPlaying._command_data.description == "Show what's playing right now."
+
+
+def test_loader_registered_np_alias() -> None:
+    """``/np`` remains as a shorthand alias to ``/nowplaying`` (issue #150)."""
+    assert np_module.Np._command_data.name == "np"
+    assert np_module.Np._command_data.description == t("np.command.description", locale="en_US")
