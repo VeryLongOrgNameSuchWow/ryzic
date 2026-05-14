@@ -66,7 +66,7 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 
 ## Error handling
 
-- [ ] `/play https://youtube.com.invalid/watch?v=x` is rejected by the URL validator with `Only YouTube URLs are supported.`
+- [ ] `/play https://youtube.com.invalid/watch?v=x` is rejected by the URL validator with `Only YouTube URLs are supported. Paste a link like https://youtu.be/dQw4w9WgXcQ.`
 - [ ] `/play <livestream_url>` is rejected with the livestream-not-supported message before any download starts.
 - [ ] `/play <private_video_url>` surfaces `That video is private.`
 - [ ] `/play <age_restricted_url>` surfaces `That video is age-restricted and can't be played.`

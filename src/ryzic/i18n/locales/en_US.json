@@ -113,7 +113,7 @@
     "play.error.playlist_empty_or_private": "That playlist is empty or private.",
     "play.error.playlist_all_failed": "Could not load any tracks from that playlist.",
 
-    "ytdlp.error.unsupported_url": "Only YouTube URLs are supported.",
+    "ytdlp.error.unsupported_url": "Only YouTube URLs are supported. Paste a link like https://youtu.be/dQw4w9WgXcQ.",
     "ytdlp.error.livestream": "Livestreams are not supported in this version.",
     "ytdlp.error.age_restricted": "That video is age-restricted and can't be played.",
     "ytdlp.error.private": "That video is private.",

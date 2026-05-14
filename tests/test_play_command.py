@@ -309,7 +309,10 @@ async def test_unsupported_url_rejected_before_io(url: str) -> None:
     ctx = _FakeContext(bot)
     await play_module._handle_play(cast(lightbulb.Context, ctx), url)
     assert ctx.responses[0][0] == t("ytdlp.error.unsupported_url", locale="en_US")
-    assert ctx.responses[0][0] == "Only YouTube URLs are supported."
+    assert (
+        ctx.responses[0][0]
+        == "Only YouTube URLs are supported. Paste a link like https://youtu.be/dQw4w9WgXcQ."
+    )
 
 
 # ---------------------------------------------------------------------------
