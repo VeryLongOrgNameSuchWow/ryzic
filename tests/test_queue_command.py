@@ -40,7 +40,7 @@ def _reset_state() -> None:
 
 async def test_dm_invocation_returns_friendly_error() -> None:
     bot = FakeBot()
-    ctx = context_for(bot, guild_id=None)
+    ctx = context_for(bot, guild_id=None, command_name="queue")
 
     await queue_module._handle_queue(ctx)
 
@@ -58,6 +58,7 @@ async def test_no_lavalink_client_returns_empty_message() -> None:
     await queue_module._handle_queue(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("queue.error.empty_and_nothing_playing", locale="en_US")
     assert fake.responses[0][0] == "Queue is empty and nothing is playing."
     assert fake.responses[0][1].get("ephemeral") is True
 
@@ -70,7 +71,7 @@ async def test_no_player_returns_empty_message() -> None:
     await queue_module._handle_queue(ctx)
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == "Queue is empty and nothing is playing."
+    assert fake.responses[0][0] == t("queue.error.empty_and_nothing_playing", locale="en_US")
 
 
 async def test_player_idle_returns_empty_message() -> None:
@@ -84,7 +85,7 @@ async def test_player_idle_returns_empty_message() -> None:
     await queue_module._handle_queue(ctx)
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == "Queue is empty and nothing is playing."
+    assert fake.responses[0][0] == t("queue.error.empty_and_nothing_playing", locale="en_US")
 
 
 async def test_current_without_metadata_returns_empty_message() -> None:
@@ -99,7 +100,7 @@ async def test_current_without_metadata_returns_empty_message() -> None:
     await queue_module._handle_queue(ctx)
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == "Queue is empty and nothing is playing."
+    assert fake.responses[0][0] == t("queue.error.empty_and_nothing_playing", locale="en_US")
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +126,11 @@ async def test_command_responds_with_embed_when_playing() -> None:
     assert embed.title is not None and embed.title.startswith("Queue (1 track ")
 
 
-async def test_default_response_is_public() -> None:
-    """``/queue`` without ``private:True`` posts the embed to the channel."""
+async def test_default_response_is_ephemeral() -> None:
+    """``/queue`` defaults to ``private=True`` (issue #148).
+
+    Status-introspection commands answer the invoker, not the channel.
+    """
     bot = FakeBot()
     ctx = context_for(bot)
     ll = FakeLavalinkClient()
@@ -137,13 +141,28 @@ async def test_default_response_is_public() -> None:
     await queue_module._handle_queue(ctx)
 
     fake = cast(Any, ctx)
-    # Single response, public (ephemeral=False). Discord-side this means
-    # the embed shows in the channel for everyone.
+    assert fake.responses[0][1].get("ephemeral") is True
+
+
+async def test_private_false_makes_response_public() -> None:
+    """``private=False`` opts back to a public response (issue #100)."""
+    bot = FakeBot()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.current = make_track_with_info(make_track_info(title="Now"))
+
+    await queue_module._handle_queue(ctx, private=False)
+
+    fake = cast(Any, ctx)
     assert fake.responses[0][1].get("ephemeral") is False
+    embed = fake.responses[0][1]["embed"]
+    assert isinstance(embed, hikari.Embed)
 
 
 async def test_private_true_makes_response_ephemeral() -> None:
-    """``private=True`` routes the embed to an ephemeral response (issue #100)."""
+    """``private=True`` (also the default since #148) routes to ephemeral."""
     bot = FakeBot()
     ctx = context_for(bot)
     ll = FakeLavalinkClient()
@@ -155,7 +174,6 @@ async def test_private_true_makes_response_ephemeral() -> None:
 
     fake = cast(Any, ctx)
     assert fake.responses[0][1].get("ephemeral") is True
-    # Embed itself is unchanged — same builder, same content.
     embed = fake.responses[0][1]["embed"]
     assert isinstance(embed, hikari.Embed)
 
@@ -358,6 +376,12 @@ def test_embed_description_escapes_markdown_in_titles() -> None:
 
 def test_loader_registered_queue_command() -> None:
     assert queue_module.Queue._command_data.name == "queue"
+    assert queue_module.Queue._command_data.description == t(
+        "queue.command.description", locale="en_US"
+    )
+    assert queue_module.Queue._command_data.description == (
+        "Show the current track and upcoming queue."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +445,7 @@ async def test_out_of_range_page_returns_friendly_ephemeral() -> None:
     await queue_module._handle_queue(ctx, page=2)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("queue.error.too_few_pages", locale="en_US", count=1)
     assert fake.responses[0][0] == "Queue has only 1 page."
     assert fake.responses[0][1].get("ephemeral") is True
 
@@ -433,6 +458,7 @@ async def test_out_of_range_pluralizes_correctly_for_multiple_pages() -> None:
     await queue_module._handle_queue(ctx, page=99)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("queue.error.too_few_pages", locale="en_US", count=2)
     assert fake.responses[0][0] == "Queue has only 2 pages."
     assert fake.responses[0][1].get("ephemeral") is True
 
@@ -465,6 +491,7 @@ async def test_empty_queue_with_explicit_page_two_returns_out_of_range() -> None
     await queue_module._handle_queue(ctx, page=2)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("queue.error.too_few_pages", locale="en_US", count=1)
     assert fake.responses[0][0] == "Queue has only 1 page."
 
 
