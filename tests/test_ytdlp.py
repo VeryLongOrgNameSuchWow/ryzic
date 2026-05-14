@@ -218,18 +218,21 @@ async def test_resolve_track_rejects_unsupported_url(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"),
+    ("raw", "expected_key", "expected_text"),
     [
         (
             "ERROR: [youtube] X: Sign in to confirm your age",
+            "ytdlp.error.age_restricted",
             "That video is age-restricted and can't be played.",
         ),
         (
             "ERROR: Private video. Sign in if you've been granted access.",
+            "ytdlp.error.private",
             "That video is private.",
         ),
         (
             "ERROR: [youtube] X: Video unavailable. The uploader has not made it available.",
+            "ytdlp.error.region_blocked",
             "That video is not available in this region.",
         ),
         # Issue #132: ``resolve_track`` now uses ``process=False`` so format
@@ -239,18 +242,24 @@ async def test_resolve_track_rejects_unsupported_url(tmp_path: Path) -> None:
         (
             "ERROR: [youtube] 4RmaQsA9FYs: Requested format is not available. "
             "Use --list-formats for a list of available formats",
+            "ytdlp.error.format_unavailable",
             "This track's audio format isn't available right now (likely a YouTube-side change).",
         ),
     ],
 )
-async def test_resolve_track_maps_known_errors(raw: str, expected: str, tmp_path: Path) -> None:
+async def test_resolve_track_maps_known_errors(
+    raw: str, expected_key: str, expected_text: str, tmp_path: Path
+) -> None:
     with (
         patch.object(ytdlp, "_sync_extract", side_effect=DownloadError(raw)),
         pytest.raises(FetchFailed) as excinfo,
     ):
         await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
-    # Exact-match: PR6a /play displays these verbatim.
-    assert str(excinfo.value) == expected
+    # Producer-side contract: ``key`` + ``vars`` carry the catalog payload.
+    assert excinfo.value.key == expected_key
+    assert excinfo.value.vars == {}
+    # Consumer-side rendering still matches the byte-identical EN copy.
+    assert str(excinfo.value) == expected_text
 
 
 async def test_resolve_track_unknown_download_error_uses_fallback_sentence(tmp_path: Path) -> None:
@@ -260,13 +269,17 @@ async def test_resolve_track_unknown_download_error_uses_fallback_sentence(tmp_p
         pytest.raises(FetchFailed) as excinfo,
     ):
         await ytdlp.resolve_track(TRACK_URL, cache_root=tmp_path)
+    # Producer-side: catch-all path carries the scrubbed detail as a var,
+    # not a pre-rendered string.
+    assert excinfo.value.key == "ytdlp.error.generic_with_detail"
+    detail = excinfo.value.vars["detail"]
+    assert "ERROR: yt-dlp something went wrong" in detail
+    # Only the first line is included; the rest is dropped.
+    assert "second line" not in detail
+    assert "third" not in detail
     msg = str(excinfo.value)
     assert msg.startswith("Could not load that URL. yt-dlp said: `")
     assert msg.endswith("`")
-    # Only the first line is included; the rest is dropped.
-    assert "second line" not in msg
-    assert "third" not in msg
-    assert "ERROR: yt-dlp something went wrong" in msg
 
 
 async def test_resolve_track_error_strips_backticks_and_paths(tmp_path: Path) -> None:

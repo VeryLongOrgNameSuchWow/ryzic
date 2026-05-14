@@ -245,7 +245,7 @@ async def _play_single(
         try:
             track_info = await ytdlp.resolve_track(url, cache_root=cache.cache_root)
         except FetchFailed as exc:
-            await ctx.respond(_friendly_message(exc), ephemeral=True)
+            await ctx.respond(_friendly_message(exc, locale_for_ephemeral(ctx)), ephemeral=True)
             return
 
     player = ll_client.player_manager.create(guild_id=guild_id)
@@ -319,7 +319,7 @@ async def _play_playlist(
             url, cache_root=cache.cache_root
         )
     except FetchFailed as exc:
-        await ctx.respond(_friendly_message(exc), ephemeral=True)
+        await ctx.respond(_friendly_message(exc, locale_for_ephemeral(ctx)), ephemeral=True)
         return
 
     if not info.entries:
@@ -400,12 +400,13 @@ async def _play_playlist(
     await ctx.respond(embed=embed)
 
 
-def _friendly_message(exc: FetchFailed) -> str:
-    """Return the first arg of ``exc`` as a user-facing string.
+def _friendly_message(exc: FetchFailed, locale: str) -> str:
+    """Render ``exc`` to a user-facing string at ``locale``.
 
-    yt-dlp errors are pre-mapped to friendly sentences inside
-    :mod:`ryzic.ytdlp` (M1 §6); we never re-translate them here.
+    ``FetchFailed`` carries the catalog key + interpolation vars; the
+    consumer renders here so the same exception can read differently in
+    different command contexts (different guild locales).
     """
-    if exc.args and isinstance(exc.args[0], str) and exc.args[0]:
-        return exc.args[0]
-    return t("play.error.could_not_load_url", locale="en_US")
+    if exc.key:
+        return t(exc.key, locale=locale, **exc.vars)
+    return t("play.error.could_not_load_url", locale=locale)

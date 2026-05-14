@@ -191,7 +191,9 @@ async def test_fetch_with_fallback_rejects_trailing_newline_list_param(
     # into ``_path_for`` and pollute the cache namespace + the log line.
     bad_url = f"https://www.youtube.com/playlist?list={PLIST_ID}%0a"
     with (
-        patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("x")),
+        patch.object(
+            playlist_cache, "resolve_playlist", side_effect=FetchFailed("ytdlp.error.private")
+        ),
         pytest.raises(FetchFailed),
     ):
         await playlist_cache.fetch_with_fallback(bad_url, cache_root=tmp_path)
@@ -247,7 +249,7 @@ async def test_fetch_with_fallback_uses_cache_on_yt_dlp_failure(tmp_path: Path) 
     with patch.object(
         playlist_cache,
         "resolve_playlist",
-        side_effect=FetchFailed("yt-dlp exploded"),
+        side_effect=FetchFailed("ytdlp.error.private"),
     ) as m:
         result, fetched_at, used_cache = await playlist_cache.fetch_with_fallback(
             PLIST_URL, cache_root=tmp_path
@@ -268,7 +270,9 @@ async def test_fetch_with_fallback_returns_stale_cache_unconditionally(
     week_old = int(time.time()) - 7 * 24 * 60 * 60
     await playlist_cache.write(PLIST_ID, cached, tmp_path, fetched_at=week_old)
 
-    with patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("down")):
+    with patch.object(
+        playlist_cache, "resolve_playlist", side_effect=FetchFailed("ytdlp.error.private")
+    ):
         result, fetched_at, used_cache = await playlist_cache.fetch_with_fallback(
             PLIST_URL, cache_root=tmp_path
         )
@@ -279,7 +283,7 @@ async def test_fetch_with_fallback_returns_stale_cache_unconditionally(
 
 
 async def test_fetch_with_fallback_reraises_when_no_cache(tmp_path: Path) -> None:
-    original = FetchFailed("That playlist is empty or private.")
+    original = FetchFailed("ytdlp.error.private")
     with (
         patch.object(playlist_cache, "resolve_playlist", side_effect=original),
         pytest.raises(FetchFailed) as excinfo,
@@ -304,7 +308,9 @@ async def test_fetch_with_fallback_reraises_when_no_extractable_id(
     tmp_path: Path, url: str
 ) -> None:
     with (
-        patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("x")),
+        patch.object(
+            playlist_cache, "resolve_playlist", side_effect=FetchFailed("ytdlp.error.private")
+        ),
         pytest.raises(FetchFailed),
     ):
         await playlist_cache.fetch_with_fallback(url, cache_root=tmp_path)
@@ -318,7 +324,9 @@ async def test_fetch_with_fallback_no_list_param_ignores_unrelated_cache(
     await playlist_cache.write(PLIST_ID, _playlist(), tmp_path)
     no_list = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     with (
-        patch.object(playlist_cache, "resolve_playlist", side_effect=FetchFailed("x")),
+        patch.object(
+            playlist_cache, "resolve_playlist", side_effect=FetchFailed("ytdlp.error.private")
+        ),
         pytest.raises(FetchFailed),
     ):
         await playlist_cache.fetch_with_fallback(no_list, cache_root=tmp_path)

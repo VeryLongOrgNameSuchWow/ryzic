@@ -218,7 +218,7 @@ class AudioCache:
             raise
 
         if not tmp_path.exists():
-            raise FetchFailed(f"download finished but {tmp_path!s} is missing")
+            raise FetchFailed("audio_cache.error.download_missing", path=str(tmp_path))
 
         final = _audio_path(self._cache_root, track.video_id, _AUDIO_EXT)
         final.parent.mkdir(parents=True, exist_ok=True)
