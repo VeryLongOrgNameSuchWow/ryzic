@@ -20,6 +20,7 @@ import pytest
 from dirty_equals import IsPartialDict
 
 from ryzic import config, lavalink_glue
+from ryzic.i18n import _broadcast_t
 from tests._command_helpers import RecordingCache
 
 
@@ -600,6 +601,9 @@ async def test_track_exception_strips_markdown_and_caps_length() -> None:
     detail_start = content.index("failed:") + len("failed: ")
     detail_end = content.rindex(". Skipping.")
     assert detail_end - detail_start <= 200
+    # Catalog template envelope: ``Track **...** failed: ...  Skipping.``
+    assert content.startswith("Track **ok title** failed: ")
+    assert content.endswith(". Skipping.")
 
 
 async def test_track_exception_falls_back_to_unknown_error_when_message_missing() -> None:
@@ -641,6 +645,12 @@ async def test_track_exception_falls_back_to_unknown_error_when_message_missing(
     assert "unknown error" in content
     # Even the fallback path must not surface the JVM cause string.
     assert "/opt/Lavalink/leak.txt" not in content
+    # Catalog rendering: ``_safe_error_text(None)`` → "unknown error" both
+    # sides of "failed: ".
+    assert content == _broadcast_t(
+        "lavalink.broadcast.track_exception", title="song", detail="unknown error"
+    )
+    assert content == "Track **song** failed: unknown error. Skipping."
 
 
 async def test_track_stuck_sanitises_title() -> None:
@@ -675,7 +685,9 @@ async def test_track_stuck_sanitises_title() -> None:
     assert len(bot.created_messages) == 1
     _, content = bot.created_messages[0]
     # Title stripped of its own markdown chars; the **…** template wrap is
-    # ours, not user-controlled.
+    # ours, not user-controlled. Catalog rendering and the literal must agree —
+    # if either side drifts the byte-identical contract is broken.
+    assert content == _broadcast_t("lavalink.broadcast.track_stuck", title="pwn")
     assert content == "Track **pwn** got stuck and was skipped."
     # The leading newline truncation drops the @everyone line entirely.
     assert "@everyone" not in content
@@ -1257,3 +1269,181 @@ async def test_track_end_with_none_track_does_not_record() -> None:
     )
 
     assert track_history.get(111) == []
+
+
+# ---------------------------------------------------------------------------
+# Catalog rendering for ``lavalink.broadcast.*`` (PR I)
+#
+# Every broadcast string migrated to the catalog gets a unit-level
+# ``_broadcast_t`` render that asserts byte-identical output against the
+# pre-PR literal. Pairs with the integration-level assertions inside the
+# event-handler tests above (belt-and-suspenders against catalog drift).
+# ---------------------------------------------------------------------------
+
+
+def test_broadcast_t_renders_auto_leave_with_duration() -> None:
+    rendered = _broadcast_t("lavalink.broadcast.auto_leave", duration="5 minutes")
+    assert rendered == "Idle for 5 minutes — disconnecting."
+
+
+def test_broadcast_t_renders_voice_lost_without_vars() -> None:
+    assert _broadcast_t("lavalink.broadcast.voice_lost") == "Voice connection lost. Queue cleared."
+
+
+def test_broadcast_t_renders_node_reconnecting_without_vars() -> None:
+    """N14 UX drift: ASCII ``...`` here vs ``…`` elsewhere; pinned as-is."""
+    assert (
+        _broadcast_t("lavalink.broadcast.node_reconnecting")
+        == "Audio service disconnected. Reconnecting..."
+    )
+
+
+def test_broadcast_t_renders_track_stuck_with_title() -> None:
+    rendered = _broadcast_t("lavalink.broadcast.track_stuck", title="My Song")
+    assert rendered == "Track **My Song** got stuck and was skipped."
+
+
+def test_broadcast_t_renders_track_exception_with_title_and_detail() -> None:
+    rendered = _broadcast_t("lavalink.broadcast.track_exception", title="My Song", detail="403")
+    assert rendered == "Track **My Song** failed: 403. Skipping."
+
+
+async def test_auto_leave_broadcast_uses_catalog_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The auto-leave timer's broadcast renders through ``_broadcast_t``.
+
+    Verifies the end-to-end path (``_auto_leave`` → ``_send_to_last_play_channel``)
+    posts the catalog rendering byte-identically.
+    """
+
+    class _ConnectedPlayer:
+        is_connected = True
+
+    class _ConnectedPlayerManager:
+        def get(self, guild_id: int) -> _ConnectedPlayer:
+            return _ConnectedPlayer()
+
+    class _ConnectedClient:
+        player_manager = _ConnectedPlayerManager()
+
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, _ConnectedClient()))
+
+    async def _instant_sleep(_: float) -> None:
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+    await lavalink_glue._auto_leave(cast(hikari.GatewayBot, bot), 111, 45)
+
+    assert bot.created_messages == [
+        (999, _broadcast_t("lavalink.broadcast.auto_leave", duration="45 seconds")),
+    ]
+    assert bot.created_messages[0][1] == "Idle for 45 seconds — disconnecting."
+
+
+async def test_websocket_closed_4014_broadcasts_voice_lost_from_catalog() -> None:
+    """Voice 4014 path posts the catalog rendering, not a Python literal."""
+
+    @dataclass
+    class _WsClosedEvent:
+        player: _QueuePlayer
+        code: int = 4014
+        reason: str = "Disconnected"
+        by_remote: bool = True
+
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent(player=_QueuePlayer())),
+    )
+
+    assert bot.created_messages == [(999, _broadcast_t("lavalink.broadcast.voice_lost"))]
+    assert bot.created_messages[0][1] == "Voice connection lost. Queue cleared."
+
+
+async def test_node_disconnected_broadcasts_node_reconnecting_from_catalog() -> None:
+    """NodeDisconnected path posts the catalog rendering, once per guild."""
+
+    @dataclass
+    class _Node:
+        name: str = "ryzic-default"
+
+    @dataclass
+    class _NodeDisconnectedEvent:
+        node: _Node
+        code: int | None = 1006
+        reason: str | None = "lost"
+
+    class _PlayerManager:
+        def __init__(self, players: list[_QueuePlayer]) -> None:
+            self._players = players
+
+        def values(self) -> list[_QueuePlayer]:
+            return list(self._players)
+
+    class _ClientWithPlayers:
+        def __init__(self, players: list[_QueuePlayer]) -> None:
+            self.player_manager = _PlayerManager(players)
+
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    lavalink_glue.last_play_channel[222] = 888
+    client = _ClientWithPlayers(
+        [_QueuePlayer(guild_id=111, queue=[]), _QueuePlayer(guild_id=222, queue=[])]
+    )
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, client))
+
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    await handler.on_node_disconnected(
+        cast(lavalink.NodeDisconnectedEvent, _NodeDisconnectedEvent(node=_Node())),
+    )
+
+    expected = _broadcast_t("lavalink.broadcast.node_reconnecting")
+    assert bot.created_messages == [(999, expected), (888, expected)]
+    assert expected == "Audio service disconnected. Reconnecting..."
+
+
+async def test_track_exception_broadcast_uses_catalog_template() -> None:
+    """Track-exception path renders through the catalog with escape+strip composition.
+
+    Title runs through ``_safe_error_text`` (strip + 1st-line + cap) THEN
+    ``escape_markdown`` (per the markdown-``%{var}`` contract for vars
+    inside ``**...**``). Detail stays on ``_safe_error_text`` to preserve
+    the pre-PR rendering exactly.
+    """
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+
+    @dataclass
+    class _Track:
+        title: str = "Plain Title"
+
+    @dataclass
+    class _Player:
+        guild_id: int = 111
+
+    @dataclass
+    class _Event:
+        track: _Track
+        player: _Player
+        message: str
+        cause: str
+        severity: str = "FAULT"
+
+    await handler.on_track_exception(
+        cast(
+            lavalink.TrackExceptionEvent,
+            _Event(track=_Track(), player=_Player(), message="403 Forbidden", cause="x"),
+        )
+    )
+
+    expected = _broadcast_t(
+        "lavalink.broadcast.track_exception", title="Plain Title", detail="403 Forbidden"
+    )
+    assert bot.created_messages == [(999, expected)]
+    assert bot.created_messages[0][1] == "Track **Plain Title** failed: 403 Forbidden. Skipping."

@@ -52,6 +52,7 @@ import lavalink
 from lavalink.common import VoiceServerUpdatePayload, VoiceStateUpdatePayload
 
 from . import audio_cache, config, track_history, ux
+from .i18n import _broadcast_t
 
 _log = logging.getLogger(__name__)
 
@@ -170,7 +171,12 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> No
 
     _reset_voice_ready(guild_id)
     await _send_to_last_play_channel(
-        bot, guild_id, f"Idle for {_format_idle_duration(seconds)} — disconnecting."
+        bot,
+        guild_id,
+        _broadcast_t(
+            "lavalink.broadcast.auto_leave",
+            duration=_format_idle_duration(seconds),
+        ),
     )
 
 
@@ -369,11 +375,14 @@ class EventHandler:
         # ``event.cause`` is a JVM stack trace; ``message`` is a short cause
         # description. Prefer ``message`` and never the full ``cause`` —
         # both are sanitised regardless.
-        detail = _safe_error_text(event.message)
         await _send_to_last_play_channel(
             self._bot,
             guild_id,
-            f"Track **{_safe_error_text(title)}** failed: {detail}. Skipping.",
+            _broadcast_t(
+                "lavalink.broadcast.track_exception",
+                title=ux.escape_markdown(_safe_error_text(title)),
+                detail=_safe_error_text(event.message),
+            ),
         )
 
     @lavalink.listener(lavalink.TrackStuckEvent)
@@ -396,7 +405,10 @@ class EventHandler:
         await _send_to_last_play_channel(
             self._bot,
             guild_id,
-            f"Track **{_safe_error_text(title)}** got stuck and was skipped.",
+            _broadcast_t(
+                "lavalink.broadcast.track_stuck",
+                title=ux.escape_markdown(_safe_error_text(title)),
+            ),
         )
 
     @lavalink.listener(lavalink.QueueEndEvent)
@@ -436,7 +448,9 @@ class EventHandler:
         _cancel_auto_leave(guild_id)
         _reset_voice_ready(guild_id)
         await _send_to_last_play_channel(
-            self._bot, guild_id, "Voice connection lost. Queue cleared."
+            self._bot,
+            guild_id,
+            _broadcast_t("lavalink.broadcast.voice_lost"),
         )
         from . import now_playing
 
@@ -455,6 +469,7 @@ class EventHandler:
             return
         from . import now_playing
 
+        reconnect_message = _broadcast_t("lavalink.broadcast.node_reconnecting")
         notified: set[int] = set()
         for player in list(client.player_manager.values()):
             guild_id = player.guild_id
@@ -465,11 +480,7 @@ class EventHandler:
             if guild_id in notified:
                 continue
             notified.add(guild_id)
-            await _send_to_last_play_channel(
-                self._bot,
-                guild_id,
-                "Audio service disconnected. Reconnecting...",
-            )
+            await _send_to_last_play_channel(self._bot, guild_id, reconnect_message)
 
     @lavalink.listener(lavalink.NodeConnectedEvent)
     async def on_node_connected(self, event: lavalink.NodeConnectedEvent) -> None:
