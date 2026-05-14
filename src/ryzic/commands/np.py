@@ -99,8 +99,6 @@ async def _handle_np(ctx: lightbulb.Context, *, private: bool = False) -> None:
         )
         return
 
-    # ``private=True`` → ephemeral response (use ephemeral locale resolver);
-    # ``private=False`` → public response (use guild-preferred locale).
     locale = locale_for_ephemeral(ctx) if private else locale_for_public(ctx)
     embed = ux.build_simple_now_playing_embed(
         info, int(player.position), paused=player.paused, locale=locale
