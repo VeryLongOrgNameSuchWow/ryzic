@@ -240,6 +240,9 @@ def _reset_module_state() -> None:
     audio_cache.set_audio_cache(None)
     lavalink_glue._reset_state_for_test()
     lavalink_glue._set_lavalink_client_for_test(None)
+    # Per-guild first-play-tip tracking lives at module scope; reset so
+    # tests get a fresh "first play" world.
+    play_module._reset_state_for_test()
 
 
 @pytest.fixture
@@ -1109,6 +1112,162 @@ async def test_load_one_handles_node_get_tracks_exception(cache: Any) -> None:
     release_mock.assert_awaited_once_with(track.video_id)
     assert ctx.responses[0][0] == t("play.error.could_not_load_track", locale="en_US")
     assert ctx.responses[0][0] == "Could not load that track. Try a different URL."
+
+
+# ---------------------------------------------------------------------------
+# First-play tip footer (issue #152)
+# ---------------------------------------------------------------------------
+
+
+async def _drive_successful_single_play(
+    cache_obj: Any, guild_id: int = 111
+) -> tuple[_FakeContext, _FakeLavalinkClient]:
+    """Run one successful single-track ``/play`` and return the ctx + ll client.
+
+    Shared helper so the tip-footer tests don't repeat the load mock
+    boilerplate. Each call uses a fresh ``_FakeContext`` so the response
+    list is isolated. ``guild_id`` plumbs through to the bot's voice
+    state so multi-guild tests can drive distinct guilds.
+    """
+    states: dict[tuple[int, int], _FakeVoiceState | None] = {
+        (guild_id, 222): _FakeVoiceState(channel_id=999),
+    }
+    bot = _FakeBot(states=states, channels={999: _FakeChannel(type=hikari.ChannelType.GUILD_VOICE)})
+    ctx = _FakeContext(bot, guild_id=guild_id)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    track = _track()
+    audio_track = _FakeAudioTrack(title=track.title, identifier=track.video_id)
+    node.get_tracks_results.append(
+        _FakeLoadResult(load_type=lavalink.server.LoadType.TRACK, tracks=[audio_track])
+    )
+    with (
+        patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=track)),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    return ctx, ll
+
+
+def _footer_text(ctx: _FakeContext) -> str:
+    embed = ctx.responses[-1][1]["embed"]
+    assert isinstance(embed, hikari.Embed)
+    return embed.footer.text if embed.footer and embed.footer.text else ""
+
+
+async def test_first_play_appends_tip_footer(cache: Any) -> None:
+    """First successful /play in a fresh guild surfaces the controller-button tip.
+
+    Belt-and-suspenders: assert the tip is present AND byte-identical to
+    the catalog rendering, so a future copy edit can't silently drift
+    the user-visible string.
+    """
+    ctx, _ = await _drive_successful_single_play(cache)
+    footer = _footer_text(ctx)
+    tip = t("play.success.first_play_tip", locale="en_US")
+    assert tip in footer
+    assert tip == ("Tip: the buttons below let you pause / skip / leave without slash commands.")
+    # Pre-existing footer copy is preserved — the tip is appended, not
+    # an overwrite. "playing now" is the build_queued_track_embed footer
+    # for an idle-into-play branch.
+    assert "playing now" in footer
+
+
+async def test_second_play_in_same_guild_omits_tip(cache: Any) -> None:
+    """Second successful /play in the same guild drops the tip."""
+    first_ctx, _ = await _drive_successful_single_play(cache, guild_id=111)
+    assert t("play.success.first_play_tip", locale="en_US") in _footer_text(first_ctx)
+    second_ctx, _ = await _drive_successful_single_play(cache, guild_id=111)
+    footer = _footer_text(second_ctx)
+    assert t("play.success.first_play_tip", locale="en_US") not in footer
+    # The original footer copy still rides on the second-play embed.
+    assert "playing now" in footer
+
+
+async def test_tip_state_is_per_guild(cache: Any) -> None:
+    """A successful /play in guild A doesn't suppress the tip in guild B."""
+    ctx_a, _ = await _drive_successful_single_play(cache, guild_id=111)
+    assert t("play.success.first_play_tip", locale="en_US") in _footer_text(ctx_a)
+    ctx_b, _ = await _drive_successful_single_play(cache, guild_id=222)
+    assert t("play.success.first_play_tip", locale="en_US") in _footer_text(ctx_b)
+
+
+async def test_failed_play_does_not_mark_guild_seen(cache: Any) -> None:
+    """Queue-full / FetchFailed paths leave the guild un-marked.
+
+    Otherwise a newcomer whose very first /play happened to land on a
+    full queue would silently miss the tip on every subsequent /play.
+    """
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx_failed = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    player = ll.player_manager.create(guild_id=111)
+    player.queue = [_FakeAudioTrack(title=f"t{i}") for i in range(500)]
+    with patch.object(play_module.ytdlp, "resolve_track", AsyncMock(return_value=_track())):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx_failed),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    # The failed /play used the error sentence, not an embed.
+    assert isinstance(ctx_failed.responses[0][0], str)
+    ctx_after, _ = await _drive_successful_single_play(cache, guild_id=111)
+    assert t("play.success.first_play_tip", locale="en_US") in _footer_text(ctx_after)
+
+
+async def test_playlist_first_play_appends_tip_footer(cache: Any) -> None:
+    """Playlist success path also gets the tip on the first /play."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, node = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+
+    entries = [_track(video_id=f"vid{i:08d}") for i in range(2)]
+    info = PlaylistInfo(playlist_id="PL12345abcde", title="My PL", entries=entries)
+    for entry in entries:
+        node.get_tracks_results.append(
+            _FakeLoadResult(
+                load_type=lavalink.server.LoadType.TRACK,
+                tracks=[_FakeAudioTrack(title=entry.title, identifier=entry.video_id)],
+            )
+        )
+    with (
+        patch.object(
+            play_module.playlist_cache,
+            "fetch_with_fallback",
+            AsyncMock(return_value=(info, 1234567890, False)),
+        ),
+        patch.object(
+            audio_cache.AudioCache,
+            "get_or_download",
+            AsyncMock(return_value=Path("/var/cache/x")),
+        ),
+        patch.object(
+            lavalink_glue,
+            "wait_for_voice_ready",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await play_module._handle_play(
+            cast(lightbulb.Context, ctx),
+            "https://www.youtube.com/playlist?list=PL12345abcde",
+        )
+    footer = _footer_text(ctx)
+    assert t("play.success.first_play_tip", locale="en_US") in footer
+    # Original playlist footer copy ("requested by …") is preserved.
+    assert "requested by" in footer
 
 
 async def test_yt_dlp_download_failure_per_track_drops_track(cache: Any) -> None:

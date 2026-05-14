@@ -114,6 +114,7 @@
     "play.error.no_url_and_nothing_playing": "Paste a YouTube URL or use /play <url>.",
     "play.error.playlist_empty_or_private": "That playlist is empty or private.",
     "play.error.playlist_all_failed": "Could not load any tracks from that playlist.",
+    "play.success.first_play_tip": "Tip: the buttons below let you pause / skip / leave without slash commands.",
 
     "ytdlp.error.unsupported_url": "Only YouTube URLs are supported. Paste a link like https://youtu.be/dQw4w9WgXcQ.",
     "ytdlp.error.livestream": "Livestreams are not supported in this version.",
