@@ -41,6 +41,7 @@ async def test_empty_history_returns_friendly_ephemeral() -> None:
     await recent_module._handle_recent(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("recent.error.no_history", locale="en_US")
     assert fake.responses[0][0] == "No tracks have played yet."
     assert fake.responses[0][1].get("ephemeral") is True
 
@@ -63,4 +64,10 @@ async def test_renders_history_embed_newest_first() -> None:
 
 def test_recent_loader_registered() -> None:
     assert recent_module.Recent._command_data.name == "recent"
-    assert recent_module.Recent._command_data.description.startswith("Show")
+    assert recent_module.Recent._command_data.description == t(
+        "recent.command.description", locale="en_US"
+    )
+    assert (
+        recent_module.Recent._command_data.description
+        == "Show the last tracks played in this server."
+    )

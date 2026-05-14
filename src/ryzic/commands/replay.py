@@ -11,7 +11,7 @@ import hikari
 import lightbulb
 
 from .. import track_history
-from ..i18n import t
+from ..i18n import locale_for_ephemeral, t
 from .play import _handle_play
 
 loader = lightbulb.Loader()
@@ -21,12 +21,12 @@ loader = lightbulb.Loader()
 class Replay(
     lightbulb.SlashCommand,
     name="replay",
-    description="Re-queue a previously-played track from /recent.",
+    description=t("replay.command.description", locale="en_US"),
     contexts=[hikari.ApplicationContextType.GUILD],
 ):
     position = lightbulb.integer(
         "position",
-        "Position in /recent (1 = most recent). Defaults to 1.",
+        t("replay.param.position.description", locale="en_US"),
         default=1,
         min_value=1,
         max_value=track_history.MAX_HISTORY_SIZE,
@@ -41,14 +41,19 @@ async def _handle_replay(ctx: lightbulb.Context, position: int) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
         await ctx.respond(
-            t("voice.error.run_in_server", locale="en_US", command="replay"),
+            t("voice.error.run_in_server", locale=locale_for_ephemeral(ctx), command="replay"),
             ephemeral=True,
         )
         return
 
     history = track_history.get(guild_id)
     if not history:
-        await ctx.respond("No tracks have played yet.", ephemeral=True)
+        # Shares ``recent.error.no_history`` — same copy, same domain
+        # (track-history empty), no per-command divergence in v2 plan.
+        await ctx.respond(
+            t("recent.error.no_history", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     # ``min_value=1`` already constrains position ≥ 1; the upper bound
@@ -56,9 +61,8 @@ async def _handle_replay(ctx: lightbulb.Context, position: int) -> None:
     # shorter (boot-fresh guild), so we still bounds-check against the
     # live length here.
     if position > len(history):
-        plural = "" if len(history) == 1 else "s"
         await ctx.respond(
-            f"Only {len(history)} track{plural} in history.",
+            t("replay.error.out_of_range", locale=locale_for_ephemeral(ctx), count=len(history)),
             ephemeral=True,
         )
         return

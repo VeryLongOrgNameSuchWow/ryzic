@@ -17,6 +17,7 @@ import lavalink
 import lightbulb
 
 from .. import lavalink_glue, now_playing
+from ..i18n import locale_for_ephemeral, locale_for_public, t
 from ..voice_check import ensure_same_voice
 
 loader = lightbulb.Loader()
@@ -26,7 +27,7 @@ loader = lightbulb.Loader()
 class Leave(
     lightbulb.SlashCommand,
     name="leave",
-    description="Disconnect from voice and clear the queue.",
+    description=t("leave.command.description", locale="en_US"),
     contexts=[hikari.ApplicationContextType.GUILD],
 ):
     @lightbulb.invoke
@@ -42,12 +43,18 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
 
     ll_client = lavalink_glue.get_lavalink_client()
     if ll_client is None:
-        await ctx.respond("I'm not in a voice channel.", ephemeral=True)
+        await ctx.respond(
+            t("leave.error.not_in_voice", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
     if player is None or not player.is_connected:
-        await ctx.respond("I'm not in a voice channel.", ephemeral=True)
+        await ctx.respond(
+            t("leave.error.not_in_voice", locale=locale_for_ephemeral(ctx)),
+            ephemeral=True,
+        )
         return
 
     # Stop first so Lavalink halts the stream cleanly; clearing the queue
@@ -61,4 +68,4 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
     await bot.update_voice_state(guild_id, None)
 
     await now_playing.teardown(bot, guild_id)
-    await ctx.respond("Left voice channel. Queue cleared.")
+    await ctx.respond(t("leave.success.left", locale=locale_for_public(ctx)))

@@ -90,6 +90,7 @@ async def test_already_playing_returns_friendly_error() -> None:
     await resume_module._handle_resume(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("resume.error.already_playing", locale="en_US")
     assert fake.responses[0][0] == "Already playing. Use /pause to pause."
     assert fake.responses[0][1].get("ephemeral") is True
     assert player.set_pause_calls == []
@@ -109,9 +110,14 @@ async def test_resume_success_is_public() -> None:
 
     assert player.set_pause_calls == [False]
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("resume.success.resumed", locale="en_US")
     assert fake.responses[0][0] == "Resumed."
     assert "ephemeral" not in fake.responses[0][1]
 
 
 def test_resume_loader_registered() -> None:
     assert resume_module.Resume._command_data.name == "resume"
+    assert resume_module.Resume._command_data.description == t(
+        "resume.command.description", locale="en_US"
+    )
+    assert resume_module.Resume._command_data.description == "Resume the paused track."

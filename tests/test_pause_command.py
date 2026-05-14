@@ -90,6 +90,7 @@ async def test_already_paused_returns_friendly_error() -> None:
     await pause_module._handle_pause(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("pause.error.already_paused", locale="en_US")
     assert fake.responses[0][0] == "Already paused. Use /resume."
     assert fake.responses[0][1].get("ephemeral") is True
     assert player.set_pause_calls == []
@@ -108,9 +109,14 @@ async def test_pause_success_is_public() -> None:
 
     assert player.set_pause_calls == [True]
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("pause.success.paused", locale="en_US")
     assert fake.responses[0][0] == "Paused."
     assert "ephemeral" not in fake.responses[0][1]
 
 
 def test_pause_loader_registered() -> None:
     assert pause_module.Pause._command_data.name == "pause"
+    assert pause_module.Pause._command_data.description == t(
+        "pause.command.description", locale="en_US"
+    )
+    assert pause_module.Pause._command_data.description == "Pause the currently-playing track."

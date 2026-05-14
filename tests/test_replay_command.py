@@ -65,6 +65,9 @@ async def test_empty_history_returns_friendly_ephemeral(
     await replay_module._handle_replay(ctx, position=1)
 
     fake = cast(Any, ctx)
+    # Shares the ``recent.error.no_history`` key with /recent: same copy,
+    # same semantic (track-history empty), per v2 plan DRY guidance.
+    assert fake.responses[0][0] == t("recent.error.no_history", locale="en_US")
     assert fake.responses[0][0] == "No tracks have played yet."
     assert play_calls == []
 
@@ -79,8 +82,26 @@ async def test_position_out_of_range_returns_friendly_ephemeral(
     await replay_module._handle_replay(ctx, position=5)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("replay.error.out_of_range", locale="en_US", count=1)
     assert fake.responses[0][0] == "Only 1 track in history."
     assert fake.responses[0][1].get("ephemeral") is True
+    assert play_calls == []
+
+
+async def test_position_out_of_range_plural_renders_many_variant(
+    play_calls: list[tuple[lightbulb.Context, str]],
+) -> None:
+    bot = FakeBot()
+    ctx = context_for(bot, guild_id=111)
+    track_history.record(111, make_track_info(video_id="aaaaaaaaaaa", title="A"))
+    track_history.record(111, make_track_info(video_id="bbbbbbbbbbb", title="B"))
+    track_history.record(111, make_track_info(video_id="ccccccccccc", title="C"))
+
+    await replay_module._handle_replay(ctx, position=10)
+
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("replay.error.out_of_range", locale="en_US", count=3)
+    assert fake.responses[0][0] == "Only 3 tracks in history."
     assert play_calls == []
 
 
@@ -120,4 +141,13 @@ async def test_position_two_picks_older_entry(
 
 def test_replay_loader_registered() -> None:
     assert replay_module.Replay._command_data.name == "replay"
-    assert replay_module.Replay._command_data.description.startswith("Re-queue")
+    assert replay_module.Replay._command_data.description == t(
+        "replay.command.description", locale="en_US"
+    )
+    assert (
+        replay_module.Replay._command_data.description
+        == "Re-queue a previously-played track from /recent."
+    )
+    position_option = replay_module.Replay._command_data.options["position"]
+    assert position_option.description == t("replay.param.position.description", locale="en_US")
+    assert position_option.description == "Position in /recent (1 = most recent). Defaults to 1."
