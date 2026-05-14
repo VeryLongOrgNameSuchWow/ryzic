@@ -59,6 +59,15 @@
 
     "np.error.nothing_playing": "Nothing is playing.",
 
+    "np.command.description": "Show what's playing right now.",
+    "np.param.private.description": "Only you see the response (default: False — public).",
+
+    "seek.command.description": "Jump to a position in the current track (m:ss, +30, or -15).",
+    "seek.param.position.description": "e.g. 1:30 (jump to 1m30s), +30 (skip forward 30s), -15 (go back 15s).",
+    "seek.error.bad_position": "Couldn't read that position. Use `m:ss` (e.g. `1:30`), `+SECONDS`, or `-SECONDS`.",
+    "seek.error.live_or_unknown": "Can't seek this track — its duration is unknown (livestream?).",
+    "seek.success.jumped": "Jumped to %{position}.",
+
     "pause.command.description": "Pause the currently-playing track.",
     "pause.error.already_paused": "Already paused. Use /resume.",
     "pause.success.paused": "Paused.",

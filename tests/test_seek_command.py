@@ -100,6 +100,7 @@ async def test_unknown_duration_rejects() -> None:
     await seek_module._handle_seek(ctx, "1:30")
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("seek.error.live_or_unknown", locale="en_US")
     assert "duration is unknown" in fake.responses[0][0]
     assert fake.responses[0][1].get("ephemeral") is True
     assert player.seek_calls == []
@@ -113,6 +114,7 @@ async def test_unparseable_position_rejects() -> None:
     await seek_module._handle_seek(ctx, "garbage")
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("seek.error.bad_position", locale="en_US")
     assert "Couldn't read that position" in fake.responses[0][0]
     assert fake.responses[0][1].get("ephemeral") is True
     assert player.seek_calls == []
@@ -127,7 +129,9 @@ async def test_absolute_seek_invokes_player() -> None:
 
     fake = cast(Any, ctx)
     assert player.seek_calls == [90_000]
+    assert fake.responses[0][0] == t("seek.success.jumped", locale="en_US", position="1:30")
     assert fake.responses[0][0] == "Jumped to 1:30."
+    assert "ephemeral" not in fake.responses[0][1]
 
 
 async def test_relative_seek_adds_to_position() -> None:
@@ -171,3 +175,14 @@ async def test_bare_seconds_treated_as_absolute() -> None:
 
     # Bare 45 → 45s absolute, NOT a relative jump from current position.
     assert player.seek_calls == [45_000]
+
+
+def test_seek_loader_registered() -> None:
+    assert seek_module.Seek._command_data.name == "seek"
+    assert seek_module.Seek._command_data.description == t(
+        "seek.command.description", locale="en_US"
+    )
+    assert (
+        seek_module.Seek._command_data.description
+        == "Jump to a position in the current track (m:ss, +30, or -15)."
+    )
