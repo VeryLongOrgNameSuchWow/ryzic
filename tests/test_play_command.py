@@ -101,6 +101,19 @@ class _FakeLightbulbClient:
         self.app = app
 
 
+class _FakeInteraction:
+    """Stand-in for ``ctx.interaction`` so ``locale_for_*`` resolvers run.
+
+    Neither ``locale`` nor ``guild_locale`` is set — the resolvers fall
+    back to ``en_US``, matching the byte-identical-English assertions.
+    """
+
+
+@dataclass
+class _FakeCommandData:
+    name: str = "play"
+
+
 class _FakeContext:
     def __init__(
         self,
@@ -108,11 +121,14 @@ class _FakeContext:
         guild_id: int | None = 111,
         user_id: int = 222,
         channel_id: int = 555,
+        command_name: str = "play",
     ) -> None:
         self.guild_id = guild_id
         self.user = _FakeUser(user_id)
         self.channel_id = channel_id
         self.client = _FakeLightbulbClient(bot)
+        self.interaction = _FakeInteraction()
+        self.command_data = _FakeCommandData(name=command_name)
         self.responses: list[tuple[Any, dict[str, Any]]] = []
         self.deferred = False
 
@@ -292,6 +308,7 @@ async def test_unsupported_url_rejected_before_io(url: str) -> None:
     bot = _FakeBot()
     ctx = _FakeContext(bot)
     await play_module._handle_play(cast(lightbulb.Context, ctx), url)
+    assert ctx.responses[0][0] == t("play.error.unsupported_url", locale="en_US")
     assert ctx.responses[0][0] == "Only YouTube URLs are supported."
 
 
@@ -309,6 +326,7 @@ async def test_missing_audio_cache_maps_to_audio_service_down() -> None:
         cast(lightbulb.Context, ctx),
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     )
+    assert ctx.responses[0][0] == t("play.error.audio_service_down", locale="en_US")
     assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
 
 
@@ -320,6 +338,7 @@ async def test_missing_lavalink_client_maps_to_audio_service_down(cache: Any) ->
         cast(lightbulb.Context, ctx),
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     )
+    assert ctx.responses[0][0] == t("play.error.audio_service_down", locale="en_US")
     assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
 
 
@@ -332,6 +351,7 @@ async def test_no_available_nodes_maps_to_audio_service_down(cache: Any) -> None
         cast(lightbulb.Context, ctx),
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     )
+    assert ctx.responses[0][0] == t("play.error.audio_service_down", locale="en_US")
     assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
 
 
@@ -349,6 +369,7 @@ async def test_user_not_in_voice_returns_friendly_error(cache: Any) -> None:
         cast(lightbulb.Context, ctx),
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     )
+    assert ctx.responses[0][0] == t("play.error.join_voice_first", locale="en_US")
     assert ctx.responses[0][0] == "Join a voice channel first."
 
 
@@ -361,6 +382,7 @@ async def test_user_in_stage_channel_rejected(cache: Any) -> None:
         cast(lightbulb.Context, ctx),
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     )
+    assert ctx.responses[0][0] == t("play.error.stage_unsupported", locale="en_US")
     assert ctx.responses[0][0] == "Stage channels aren't supported. Use a regular voice channel."
 
 
@@ -372,6 +394,9 @@ async def test_bot_in_different_channel_rejected_with_mention(cache: Any) -> Non
     await play_module._handle_play(
         cast(lightbulb.Context, ctx),
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    assert ctx.responses[0][0] == t(
+        "play.error.bot_in_other_channel", locale="en_US", channel_id=888
     )
     assert ctx.responses[0][0] == "I'm already playing in <#888>. Join that channel."
 
@@ -401,6 +426,9 @@ async def test_friendly_yt_dlp_error_passes_through_verbatim(cache: Any) -> None
 
 
 async def test_friendly_message_falls_back_when_args_empty() -> None:
+    assert play_module._friendly_message(FetchFailed()) == t(
+        "play.error.could_not_load_url", locale="en_US"
+    )
     assert play_module._friendly_message(FetchFailed()) == "Could not load that URL."
 
 
@@ -515,7 +543,8 @@ async def test_single_track_queue_full_rejects(cache: Any) -> None:
 
     msg = ctx.responses[0][0]
     assert isinstance(msg, str)
-    assert msg.startswith("Queue is full (500/500)")
+    assert msg == t("play.error.queue_full", locale="en_US", count=500, cap=500)
+    assert msg == "Queue is full (500/500). Wait for some tracks to finish."
     # Did NOT connect to voice (cap check happens first).
     assert bot.update_voice_state_calls == []
 
@@ -551,7 +580,8 @@ async def test_cache_hit_queue_full_releases_pin(cache: Any) -> None:
     resolve_track_mock.assert_not_awaited()
     msg = ctx.responses[0][0]
     assert isinstance(msg, str)
-    assert msg.startswith("Queue is full (500/500)")
+    assert msg == t("play.error.queue_full", locale="en_US", count=500, cap=500)
+    assert msg == "Queue is full (500/500). Wait for some tracks to finish."
     # The pin acquired by try_hit must be released so the cached file
     # remains evictable.
     release_mock.assert_awaited_once_with(track.video_id)
@@ -595,6 +625,7 @@ async def test_voice_handshake_timeout_returns_friendly_error(cache: Any) -> Non
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
+    assert ctx.responses[0][0] == t("play.error.audio_service_down", locale="en_US")
     assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
     # The pin acquired by get_or_download must be released because we
     # never enqueued the track (handshake failed).
@@ -637,7 +668,8 @@ async def test_lavalink_load_failure_releases_pin(cache: Any, load_result: _Fake
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
     release_mock.assert_awaited_once_with(track.video_id)
-    assert "Could not load that track" in str(ctx.responses[0][0])
+    assert ctx.responses[0][0] == t("play.error.could_not_load_track", locale="en_US")
+    assert ctx.responses[0][0] == "Could not load that track. Try a different URL."
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +795,7 @@ async def test_playlist_empty_returns_friendly(cache: Any) -> None:
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/playlist?list=PL12345abcde",
         )
+    assert ctx.responses[0][0] == t("play.error.playlist_empty_or_private", locale="en_US")
     assert ctx.responses[0][0] == "That playlist is empty or private."
 
 
@@ -789,7 +822,8 @@ async def test_playlist_queue_overflow_rejects(cache: Any) -> None:
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/playlist?list=PL12345abcde",
         )
-    assert "Queue is full" in str(ctx.responses[0][0])
+    assert ctx.responses[0][0] == t("play.error.queue_full", locale="en_US", count=499, cap=500)
+    assert ctx.responses[0][0] == "Queue is full (499/500). Wait for some tracks to finish."
 
 
 async def test_playlist_all_tracks_fail_returns_friendly(cache: Any) -> None:
@@ -828,7 +862,8 @@ async def test_playlist_all_tracks_fail_returns_friendly(cache: Any) -> None:
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/playlist?list=PL12345abcde",
         )
-    assert "Could not load any tracks" in str(ctx.responses[0][0])
+    assert ctx.responses[0][0] == t("play.error.playlist_all_failed", locale="en_US")
+    assert ctx.responses[0][0] == "Could not load any tracks from that playlist."
 
 
 async def test_playlist_yt_dlp_total_failure_returns_friendly(cache: Any) -> None:
@@ -889,6 +924,7 @@ async def test_playlist_voice_handshake_timeout(cache: Any) -> None:
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/playlist?list=PL12345abcde",
         )
+    assert ctx.responses[0][0] == t("play.error.audio_service_down", locale="en_US")
     assert ctx.responses[0][0] == "Audio service is down. Try again in a minute."
     release_mock.assert_awaited_once_with(entry.video_id)
 
@@ -950,7 +986,8 @@ async def test_load_one_handles_node_get_tracks_exception(cache: Any) -> None:
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
     release_mock.assert_awaited_once_with(track.video_id)
-    assert "Could not load that track" in str(ctx.responses[0][0])
+    assert ctx.responses[0][0] == t("play.error.could_not_load_track", locale="en_US")
+    assert ctx.responses[0][0] == "Could not load that track. Try a different URL."
 
 
 async def test_yt_dlp_download_failure_per_track_drops_track(cache: Any) -> None:
@@ -978,7 +1015,8 @@ async def test_yt_dlp_download_failure_per_track_drops_track(cache: Any) -> None
             cast(lightbulb.Context, ctx),
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
-    assert "Could not load that track" in str(ctx.responses[0][0])
+    assert ctx.responses[0][0] == t("play.error.could_not_load_track", locale="en_US")
+    assert ctx.responses[0][0] == "Could not load that track. Try a different URL."
 
 
 # ---------------------------------------------------------------------------
@@ -1053,8 +1091,13 @@ def test_loader_registered_play_command() -> None:
     # Smoke check: the module exposes a Loader holding the Play command.
     # The metaclass populates _command_data with the right name.
     assert play_module.Play._command_data.name == "play"
-    assert play_module.Play._command_data.description.startswith("Queue")
+    assert play_module.Play._command_data.description == t(
+        "play.command.description", locale="en_US"
+    )
+    assert play_module.Play._command_data.description == "Queue a YouTube track or playlist URL."
     # 1 string option named url, 1-500 chars.
     opt = play_module.Play._command_data.options["url"]
     assert opt.min_length == 1
     assert opt.max_length == 500
+    assert opt.description == t("play.param.url.description", locale="en_US")
+    assert opt.description == "YouTube video or playlist URL."
