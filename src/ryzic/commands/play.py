@@ -86,7 +86,7 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
 
     if not is_supported_url(url):
         await ctx.respond(
-            t("play.error.unsupported_url", locale=locale_for_ephemeral(ctx)),
+            t("ytdlp.error.unsupported_url", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
@@ -407,6 +407,4 @@ def _friendly_message(exc: FetchFailed, locale: str) -> str:
     consumer renders here so the same exception can read differently in
     different command contexts (different guild locales).
     """
-    if exc.key:
-        return t(exc.key, locale=locale, **exc.vars)
-    return t("play.error.could_not_load_url", locale=locale)
+    return t(exc.key, locale=locale, **exc.vars)

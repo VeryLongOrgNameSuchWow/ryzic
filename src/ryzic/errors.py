@@ -22,7 +22,7 @@ class FetchFailed(Exception):
 
     def __init__(self, key: str, /, **vars: Any) -> None:
         self.key = key
-        self.vars: dict[str, Any] = vars
+        self.vars = vars
         super().__init__(t(key, locale="en_US", **vars))
 
 
