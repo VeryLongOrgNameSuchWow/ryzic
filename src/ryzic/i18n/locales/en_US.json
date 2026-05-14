@@ -50,6 +50,13 @@
       "one": "… and 1 more",
       "many": "… and %{count} more"
     },
-    "ux.recent.footer": "Use /replay <position> to re-queue."
+    "ux.recent.footer": "Use /replay <position> to re-queue.",
+
+    "voice.error.run_in_server": "Run /%{command} in a server.",
+    "voice.error.bot_starting": "Bot is still starting up. Try again in a moment.",
+    "voice.error.bot_not_in_voice": "I'm not in a voice channel.",
+    "voice.error.join_my_channel": "Join <#%{channel_id}> to use this.",
+
+    "np.error.nothing_playing": "Nothing is playing."
   }
 }

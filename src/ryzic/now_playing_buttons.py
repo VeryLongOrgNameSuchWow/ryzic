@@ -67,8 +67,10 @@ class _InteractionLightbulbClient:
 class InteractionContextLike:
     """Adapter wrapping ``ComponentInteraction`` in the slash-context surface.
 
-    Only exposes what the four handlers actually read:
-    ``guild_id`` / ``user`` / ``channel_id`` / ``client.app`` / ``respond``.
+    Exposes what the four handlers actually read:
+    ``guild_id`` / ``user`` / ``channel_id`` / ``client.app`` / ``respond``
+    plus ``interaction`` (used by ``ryzic.i18n.locale_for_ephemeral`` /
+    ``locale_for_public`` via ``getattr``-with-default for the locale code).
     Cast to ``lightbulb.Context`` for the dispatch call so type-checking
     doesn't widen across the call site.
 
@@ -79,6 +81,10 @@ class InteractionContextLike:
 
     def __init__(self, interaction: hikari.ComponentInteraction, app: hikari.GatewayBot) -> None:
         self._interaction = interaction
+        # Public alias so locale resolvers (and any future ctx-shaped
+        # consumer) can reach ``.locale`` / ``.guild_locale`` the same
+        # way they would on a real lightbulb ``ctx``.
+        self.interaction = interaction
         self.guild_id = int(interaction.guild_id) if interaction.guild_id else None
         self.user = _InteractionUser(interaction)
         self.channel_id = int(interaction.channel_id)

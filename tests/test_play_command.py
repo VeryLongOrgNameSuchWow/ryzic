@@ -30,6 +30,7 @@ import pytest
 from ryzic import audio_cache, lavalink_glue, ytdlp
 from ryzic.commands import play as play_module
 from ryzic.errors import FetchFailed
+from ryzic.i18n import t
 from ryzic.ytdlp import PlaylistInfo, TrackInfo
 
 # ---------------------------------------------------------------------------
@@ -273,6 +274,7 @@ async def test_dm_invocation_returns_friendly_error() -> None:
     bot = _FakeBot()
     ctx = _FakeContext(bot, guild_id=None)
     await play_module._handle_play(cast(lightbulb.Context, ctx), "https://www.youtube.com/")
+    assert ctx.responses[0][0] == t("voice.error.run_in_server", locale="en_US", command="play")
     assert ctx.responses[0][0] == "Run /play in a server."
     assert ctx.responses[0][1].get("ephemeral") is True
 

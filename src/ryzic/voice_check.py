@@ -17,6 +17,8 @@ from typing import cast
 import hikari
 import lightbulb
 
+from .i18n import locale_for_ephemeral, t
+
 
 async def ensure_same_voice(ctx: lightbulb.Context) -> int | None:
     """Verify the invoker shares the bot's voice channel.
@@ -29,12 +31,19 @@ async def ensure_same_voice(ctx: lightbulb.Context) -> int | None:
     pushed through the gateway, and ``GUILD_VOICE_STATES`` is in the
     intent set requested by ``bot.py``.
     """
+    locale = locale_for_ephemeral(ctx)
     guild_id = ctx.guild_id
     if guild_id is None:
         # Defense in depth: ``dm_enabled=False`` at registration time
         # already blocks DMs, but a future re-registration mistake
-        # shouldn't crash the handler.
-        await ctx.respond("Run this in a server.", ephemeral=True)
+        # shouldn't crash the handler. The command name comes from
+        # lightbulb's parsed command data so the message names the
+        # specific slash command the user just ran (consolidates the
+        # five per-command "Run /<cmd> in a server." sites onto one key).
+        await ctx.respond(
+            t("voice.error.run_in_server", locale=locale, command=ctx.command_data.name),
+            ephemeral=True,
+        )
         return None
 
     # ``Client.app`` is typed as ``RESTAware`` to support the REST-only
@@ -44,21 +53,24 @@ async def ensure_same_voice(ctx: lightbulb.Context) -> int | None:
     bot = cast(hikari.GatewayBot, ctx.client.app)
     me = bot.get_me()
     if me is None:
-        await ctx.respond(
-            "Bot is still starting up. Try again in a moment.",
-            ephemeral=True,
-        )
+        await ctx.respond(t("voice.error.bot_starting", locale=locale), ephemeral=True)
         return None
 
     bot_state = bot.cache.get_voice_state(guild_id, me.id)
     if bot_state is None or bot_state.channel_id is None:
-        await ctx.respond("I'm not in a voice channel.", ephemeral=True)
+        await ctx.respond(t("voice.error.bot_not_in_voice", locale=locale), ephemeral=True)
         return None
 
     user_state = bot.cache.get_voice_state(guild_id, ctx.user.id)
     if user_state is None or user_state.channel_id != bot_state.channel_id:
+        # ``<#%{channel_id}>`` renders as a Discord channel mention
+        # client-side; no escape_markdown needed (it's not markdown).
         await ctx.respond(
-            f"Join <#{bot_state.channel_id}> to use this.",
+            t(
+                "voice.error.join_my_channel",
+                locale=locale,
+                channel_id=bot_state.channel_id,
+            ),
             ephemeral=True,
         )
         return None

@@ -9,6 +9,7 @@ import pytest
 
 from ryzic import track_history
 from ryzic.commands import recent as recent_module
+from ryzic.i18n import t
 from tests._command_helpers import (
     FakeBot,
     context_for,
@@ -28,6 +29,7 @@ async def test_outside_guild_short_circuits() -> None:
     await recent_module._handle_recent(ctx)
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.run_in_server", locale="en_US", command="recent")
     assert fake.responses[0][0] == "Run /recent in a server."
     assert fake.responses[0][1].get("ephemeral") is True
 

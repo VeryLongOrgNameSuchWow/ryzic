@@ -11,6 +11,7 @@ import hikari
 import lightbulb
 
 from .. import track_history
+from ..i18n import t
 from .play import _handle_play
 
 loader = lightbulb.Loader()
@@ -39,7 +40,10 @@ class Replay(
 async def _handle_replay(ctx: lightbulb.Context, position: int) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
-        await ctx.respond("Run /replay in a server.", ephemeral=True)
+        await ctx.respond(
+            t("voice.error.run_in_server", locale="en_US", command="replay"),
+            ephemeral=True,
+        )
         return
 
     history = track_history.get(guild_id)

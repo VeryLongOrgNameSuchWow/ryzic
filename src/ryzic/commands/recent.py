@@ -10,6 +10,7 @@ import hikari
 import lightbulb
 
 from .. import track_history, ux
+from ..i18n import t
 
 loader = lightbulb.Loader()
 
@@ -29,7 +30,10 @@ class Recent(
 async def _handle_recent(ctx: lightbulb.Context) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
-        await ctx.respond("Run /recent in a server.", ephemeral=True)
+        await ctx.respond(
+            t("voice.error.run_in_server", locale="en_US", command="recent"),
+            ephemeral=True,
+        )
         return
 
     history = track_history.get(guild_id)

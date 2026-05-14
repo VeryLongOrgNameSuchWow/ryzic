@@ -8,6 +8,7 @@ import pytest
 
 from ryzic import lavalink_glue
 from ryzic.commands import seek as seek_module
+from ryzic.i18n import t
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeBot,
@@ -46,6 +47,7 @@ async def test_voice_precondition_short_circuits() -> None:
     await seek_module._handle_seek(ctx, "0:30")
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
 
 
@@ -57,6 +59,7 @@ async def test_no_lavalink_client_returns_nothing_playing() -> None:
     await seek_module._handle_seek(ctx, "0:30")
 
     fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("np.error.nothing_playing", locale="en_US")
     assert fake.responses[0][0] == "Nothing is playing."
     assert fake.responses[0][1].get("ephemeral") is True
 
@@ -69,7 +72,7 @@ async def test_no_player_returns_nothing_playing() -> None:
     await seek_module._handle_seek(ctx, "0:30")
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == "Nothing is playing."
+    assert fake.responses[0][0] == t("np.error.nothing_playing", locale="en_US")
     assert fake.responses[0][1].get("ephemeral") is True
 
 
@@ -85,7 +88,7 @@ async def test_player_idle_returns_nothing_playing() -> None:
     await seek_module._handle_seek(ctx, "0:30")
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == "Nothing is playing."
+    assert fake.responses[0][0] == t("np.error.nothing_playing", locale="en_US")
     assert player.seek_calls == []
 
 

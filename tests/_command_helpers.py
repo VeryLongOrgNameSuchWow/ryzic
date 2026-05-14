@@ -74,6 +74,22 @@ class FakeLightbulbClient:
         self.app = app
 
 
+class FakeInteraction:
+    """Stand-in for ``ctx.interaction`` so ``locale_for_*`` resolvers run.
+
+    ``ryzic.i18n.locale_for_ephemeral`` / ``locale_for_public`` access
+    ``ctx.interaction.locale`` / ``guild_locale`` via ``getattr``-with-
+    default; this class exposes neither attribute so the resolvers fall
+    back to ``en_US`` (matching the test expectation that English copy
+    is asserted byte-identical).
+    """
+
+
+@dataclass
+class FakeCommandData:
+    name: str = "skip"
+
+
 class FakeContext:
     def __init__(
         self,
@@ -81,11 +97,14 @@ class FakeContext:
         guild_id: int | None = 111,
         user_id: int = 222,
         channel_id: int = 555,
+        command_name: str = "skip",
     ) -> None:
         self.guild_id = guild_id
         self.user = FakeUser(user_id)
         self.channel_id = channel_id
         self.client = FakeLightbulbClient(bot)
+        self.interaction = FakeInteraction()
+        self.command_data = FakeCommandData(name=command_name)
         self.responses: list[tuple[Any, dict[str, Any]]] = []
         self.defer_calls: int = 0
 
