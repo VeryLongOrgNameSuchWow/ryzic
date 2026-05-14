@@ -44,7 +44,7 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
     ll_client = lavalink_glue.get_lavalink_client()
     if ll_client is None:
         await ctx.respond(
-            t("leave.error.not_in_voice", locale=locale_for_ephemeral(ctx)),
+            t("voice.error.bot_not_in_voice", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return
@@ -52,7 +52,7 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
     player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
     if player is None or not player.is_connected:
         await ctx.respond(
-            t("leave.error.not_in_voice", locale=locale_for_ephemeral(ctx)),
+            t("voice.error.bot_not_in_voice", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,
         )
         return

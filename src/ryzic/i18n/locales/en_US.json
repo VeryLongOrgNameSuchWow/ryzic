@@ -82,7 +82,6 @@
     },
 
     "leave.command.description": "Disconnect from voice and clear the queue.",
-    "leave.error.not_in_voice": "I'm not in a voice channel.",
     "leave.success.left": "Left voice channel. Queue cleared."
   }
 }

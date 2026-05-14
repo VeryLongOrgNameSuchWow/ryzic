@@ -48,8 +48,6 @@ async def _handle_replay(ctx: lightbulb.Context, position: int) -> None:
 
     history = track_history.get(guild_id)
     if not history:
-        # Shares ``recent.error.no_history`` — same copy, same domain
-        # (track-history empty), no per-command divergence in v2 plan.
         await ctx.respond(
             t("recent.error.no_history", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,

@@ -52,7 +52,7 @@ async def test_no_lavalink_client_returns_friendly_error() -> None:
     await leave_module._handle_leave(ctx)
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == t("leave.error.not_in_voice", locale="en_US")
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
     assert fake.responses[0][1].get("ephemeral") is True
 
@@ -65,7 +65,7 @@ async def test_no_player_returns_friendly_error() -> None:
     await leave_module._handle_leave(ctx)
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == t("leave.error.not_in_voice", locale="en_US")
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
     assert bot.update_voice_state_calls == []
 
@@ -81,7 +81,7 @@ async def test_player_disconnected_returns_friendly_error() -> None:
     await leave_module._handle_leave(ctx)
 
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == t("leave.error.not_in_voice", locale="en_US")
+    assert fake.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
     assert fake.responses[0][0] == "I'm not in a voice channel."
     assert player.stop_calls == 0
 

@@ -76,10 +76,7 @@ async def _handle_skip(ctx: lightbulb.Context) -> None:
     if was_paused and player.current is not None:
         await player.set_pause(True)
 
-    # The catalog template owns the ``**...**`` markdown; the title
-    # variable is sanitised at the call site (markdown-%{var} contract,
-    # v2 plan §6) so user-controlled track titles can't break out of
-    # the bold wrapper.
+    # User-controlled title; escape before splicing into the catalog's bold template.
     safe_title = ux.safe_truncate(ux.escape_markdown(skipped_title), 256)
     # ``DefaultPlayer.skip`` synchronously pops the next track off
     # ``queue`` and plays it; if the queue was empty it instead clears
