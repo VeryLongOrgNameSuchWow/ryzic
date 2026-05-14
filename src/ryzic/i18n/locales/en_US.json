@@ -111,6 +111,7 @@
     "play.error.bot_in_other_channel": "I'm already playing in <#%{channel_id}>. Join that channel.",
     "play.error.queue_full": "Queue is full (%{count}/%{cap}). Wait for some tracks to finish.",
     "play.error.could_not_load_track": "Could not load that track. Try a different URL.",
+    "play.error.no_url_and_nothing_playing": "Paste a YouTube URL or use /play <url>.",
     "play.error.playlist_empty_or_private": "That playlist is empty or private.",
     "play.error.playlist_all_failed": "Could not load any tracks from that playlist.",
 

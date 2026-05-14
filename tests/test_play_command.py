@@ -194,6 +194,7 @@ class _FakePlayer:
         self.guild_id = guild_id
         self.queue: list[Any] = []
         self.is_playing: bool = False
+        self.paused: bool = False
         self.play_called: int = 0
         self.added: list[tuple[Any, int]] = []
 
@@ -217,6 +218,9 @@ class _FakePlayerManager:
         if guild_id not in self.players:
             self.players[guild_id] = _FakePlayer(guild_id)
         return self.players[guild_id]
+
+    def get(self, guild_id: int) -> _FakePlayer | None:
+        return self.players.get(guild_id)
 
 
 class _FakeLavalinkClient:
@@ -449,6 +453,98 @@ def test_fetch_failed_args_contain_en_rendering() -> None:
     assert str(exc) == "That video is private."
     exc_var = FetchFailed("ytdlp.error.generic_with_detail", detail="boom")
     assert str(exc_var) == "Could not load that URL. yt-dlp said: `boom`"
+
+
+# ---------------------------------------------------------------------------
+# /play with no argument (issue #146): resume reflex
+# ---------------------------------------------------------------------------
+
+
+async def test_no_url_routes_to_resume_when_paused(cache: Any) -> None:
+    """``/play`` with empty url + paused player → delegate to ``_handle_resume``.
+
+    Mocks ``_handle_resume`` to keep this test focused on the routing
+    decision; resume's own internals are covered in ``test_resume_command``.
+    """
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    player = ll.player_manager.create(guild_id=111)
+    player.is_playing = True
+    player.paused = True
+
+    resume_mock = AsyncMock()
+    with patch.object(play_module, "_handle_resume", resume_mock):
+        await play_module._handle_play(cast(lightbulb.Context, ctx), "")
+
+    resume_mock.assert_awaited_once_with(ctx)
+    # No yt-dlp / track-loading work happened.
+    assert ctx.responses == []
+
+
+async def test_no_url_with_nothing_playing_returns_url_hint(cache: Any) -> None:
+    """``/play`` with empty url + nothing playing → ephemeral URL hint."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    # No player created → ``player_manager.get(guild_id)`` returns None.
+
+    resume_mock = AsyncMock(side_effect=AssertionError("_handle_resume must not run"))
+    with patch.object(play_module, "_handle_resume", resume_mock):
+        await play_module._handle_play(cast(lightbulb.Context, ctx), "")
+
+    resume_mock.assert_not_awaited()
+    assert ctx.responses[0][0] == t("play.error.no_url_and_nothing_playing", locale="en_US")
+    assert ctx.responses[0][0] == "Paste a YouTube URL or use /play <url>."
+    assert ctx.responses[0][1].get("ephemeral") is True
+
+
+async def test_no_url_with_playing_not_paused_returns_url_hint(cache: Any) -> None:
+    """``/play`` with empty url + playing-not-paused → URL hint (not resume).
+
+    A track is currently playing (not paused). Bare ``/play`` falls through
+    to the URL hint rather than no-op-ing or pausing.
+    """
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    ll, _ = _ll_with_one_node()
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, ll))
+    player = ll.player_manager.create(guild_id=111)
+    player.is_playing = True
+    player.paused = False
+
+    resume_mock = AsyncMock(side_effect=AssertionError("_handle_resume must not run"))
+    with patch.object(play_module, "_handle_resume", resume_mock):
+        await play_module._handle_play(cast(lightbulb.Context, ctx), "")
+
+    resume_mock.assert_not_awaited()
+    assert ctx.responses[0][0] == t("play.error.no_url_and_nothing_playing", locale="en_US")
+    assert ctx.responses[0][1].get("ephemeral") is True
+
+
+async def test_no_url_in_dm_returns_run_in_server(cache: Any) -> None:
+    """DM guard fires before no-arg routing so the run-in-server copy still wins."""
+    bot = _FakeBot()
+    ctx = _FakeContext(bot, guild_id=None)
+    await play_module._handle_play(cast(lightbulb.Context, ctx), "")
+    assert ctx.responses[0][0] == t("voice.error.run_in_server", locale="en_US", command="play")
+    assert ctx.responses[0][0] == "Run /play in a server."
+
+
+async def test_no_url_with_no_lavalink_client_returns_url_hint(cache: Any) -> None:
+    """Lavalink absent → no paused player can exist → URL hint."""
+    bot = _bot_in_voice_with(user_channel_id=999)
+    ctx = _FakeContext(bot)
+    # No lavalink client installed (lavalink_glue._set_lavalink_client_for_test(None) in fixture).
+
+    resume_mock = AsyncMock(side_effect=AssertionError("_handle_resume must not run"))
+    with patch.object(play_module, "_handle_resume", resume_mock):
+        await play_module._handle_play(cast(lightbulb.Context, ctx), "")
+
+    resume_mock.assert_not_awaited()
+    assert ctx.responses[0][0] == t("play.error.no_url_and_nothing_playing", locale="en_US")
 
 
 # ---------------------------------------------------------------------------
@@ -1119,9 +1215,9 @@ def test_loader_registered_play_command() -> None:
         "play.command.description", locale="en_US"
     )
     assert play_module.Play._command_data.description == "Queue a YouTube track or playlist URL."
-    # 1 string option named url, 1-500 chars.
+    # 1 string option named url, optional (default=""), max 500 chars.
     opt = play_module.Play._command_data.options["url"]
-    assert opt.min_length == 1
+    assert opt.default == ""
     assert opt.max_length == 500
     assert opt.description == t("play.param.url.description", locale="en_US")
     assert opt.description == "YouTube video or playlist URL."
