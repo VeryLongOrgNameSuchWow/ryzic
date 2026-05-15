@@ -170,10 +170,7 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> No
     if auto_leave_tasks.get(guild_id) is asyncio.current_task():
         del auto_leave_tasks[guild_id]
 
-    client = _ll_client
-    if client is None:
-        return
-    player = client.player_manager.get(guild_id)
+    player = get_player(guild_id)
     if player is None or not player.is_connected:
         return
 
