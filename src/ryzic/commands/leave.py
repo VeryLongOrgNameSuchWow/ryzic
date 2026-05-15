@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import cast
 
 import hikari
-import lavalink
 import lightbulb
 
 from .. import lavalink_glue, now_playing
@@ -41,15 +40,7 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
 
     guild_id = cast(int, ctx.guild_id)
 
-    ll_client = lavalink_glue.get_lavalink_client()
-    if ll_client is None:
-        await ctx.respond(
-            t("voice.error.bot_not_in_voice", locale=locale_for_ephemeral(ctx)),
-            ephemeral=True,
-        )
-        return
-
-    player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
+    player = lavalink_glue.get_player(guild_id)
     if player is None or not player.is_connected:
         await ctx.respond(
             t("voice.error.bot_not_in_voice", locale=locale_for_ephemeral(ctx)),
