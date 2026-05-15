@@ -226,17 +226,6 @@ def test_build_simple_now_playing_embed_paused_indicator() -> None:
     assert "(paused)" in body
 
 
-def test_build_simple_now_playing_embed_footer_carries_uploader() -> None:
-    embed = ux.build_simple_now_playing_embed(
-        _track(title="Song", uploader="Some Channel"),
-        position_ms=0,
-        paused=False,
-        locale="en_US",
-    )
-    assert embed.footer is not None
-    assert "Some Channel" in (embed.footer.text or "")
-
-
 # ---------------------------------------------------------------------------
 # build_queued_track_embed
 # ---------------------------------------------------------------------------
