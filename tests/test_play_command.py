@@ -1178,7 +1178,9 @@ async def test_first_play_appends_tip_footer(cache: Any) -> None:
     footer = _footer_text(ctx)
     tip = t("play.success.first_play_tip", locale="en_US")
     assert tip in footer
-    assert tip == ("Tip: the buttons below let you pause / skip / leave without slash commands.")
+    assert tip == (
+        "Tip: the buttons below let you pause / skip / stop & leave without slash commands."
+    )
     # Pre-existing footer copy is preserved — the tip is appended, not
     # an overwrite. "playing now" is the build_queued_track_embed footer
     # for an idle-into-play branch.

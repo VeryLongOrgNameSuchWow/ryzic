@@ -113,7 +113,7 @@
     "play.error.no_url_and_nothing_playing": "Paste a YouTube URL or use /play <url>.",
     "play.error.playlist_empty_or_private": "That playlist is empty or private.",
     "play.error.playlist_all_failed": "Could not load any tracks from that playlist.",
-    "play.success.first_play_tip": "Tip: the buttons below let you pause / skip / leave without slash commands.",
+    "play.success.first_play_tip": "Tip: the buttons below let you pause / skip / stop & leave without slash commands.",
 
     "ytdlp.error.unsupported_url": "Only YouTube URLs are supported. Paste a link like https://youtu.be/dQw4w9WgXcQ.",
     "ytdlp.error.livestream": "Livestreams are not supported in this version.",
@@ -132,7 +132,7 @@
     "controller.button.pause": "Pause",
     "controller.button.resume": "Resume",
     "controller.button.skip": "Skip",
-    "controller.button.leave": "Leave",
+    "controller.button.leave": "Stop & leave",
     "controller.error.unknown_button": "That button isn't wired up.",
     "controller.error.guild_only": "Controller buttons only work in a server.",
     "controller.error.stale_session": "This controller is from a previous session. Run /play to start a new one.",

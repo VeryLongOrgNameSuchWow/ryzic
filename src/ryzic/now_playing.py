@@ -47,9 +47,9 @@ _log = logging.getLogger(__name__)
 BUTTON_PAUSE = "ryzic:np:pause"
 BUTTON_RESUME = "ryzic:np:resume"
 BUTTON_SKIP = "ryzic:np:skip"
-# custom_id wire-compat preserved per #147; user-visible label is "Leave"
-# (see ``_LABEL_LEAVE`` below). Existing controller embeds posted before
-# the label rename remain dispatchable.
+# custom_id wire-compat preserved per #147 and #174; user-visible label
+# is "Stop & leave" (see ``_LABEL_LEAVE`` below). Existing controller
+# embeds posted before the label rename remain dispatchable.
 BUTTON_STOP = "ryzic:np:stop"
 
 # All of our custom_ids share this prefix; the interaction listener
