@@ -344,19 +344,18 @@ def _labels_in_row(row: hikari.api.MessageActionRowBuilder) -> list[str]:
     return [comp["label"] for comp in components]
 
 
-def test_active_row_renders_pause_skip_leave_labels() -> None:
-    """#147 fold: the stop-styled button must read 'Leave', not 'Stop'."""
+def test_active_row_renders_expected_button_labels() -> None:
+    """#174 fold: the stop-styled button surfaces both effects via 'Stop & leave'."""
     [row] = now_playing._build_components()
     assert _labels_in_row(row) == [
         t("controller.button.pause", locale="en_US"),
         t("controller.button.skip", locale="en_US"),
         t("controller.button.leave", locale="en_US"),
     ]
-    assert "Leave" in _labels_in_row(row)
-    assert "Stop" not in _labels_in_row(row)
+    assert "Stop & leave" in _labels_in_row(row)
 
 
-def test_paused_row_renders_resume_skip_leave_labels() -> None:
+def test_paused_row_renders_expected_button_labels() -> None:
     [row] = now_playing._build_components_paused()
     assert _labels_in_row(row) == [
         t("controller.button.resume", locale="en_US"),
@@ -365,7 +364,7 @@ def test_paused_row_renders_resume_skip_leave_labels() -> None:
     ]
 
 
-def test_idle_row_renders_pause_skip_leave_labels() -> None:
+def test_idle_row_renders_expected_button_labels() -> None:
     [row] = now_playing._build_idle_components()
     assert _labels_in_row(row) == [
         t("controller.button.pause", locale="en_US"),
