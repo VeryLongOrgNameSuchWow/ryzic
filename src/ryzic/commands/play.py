@@ -151,12 +151,10 @@ async def _handle_play(ctx: lightbulb.Context, url: str) -> None:
         # Bare ``/play`` resumes a paused track. Delegate to
         # ``_handle_resume`` (it owns the same-voice guard); surface the
         # URL hint for the genuinely-idle case.
-        ll_client = lavalink_glue.get_lavalink_client()
-        if ll_client is not None:
-            player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
-            if player is not None and player.is_playing and player.paused:
-                await _handle_resume(ctx)
-                return
+        player = lavalink_glue.get_player(guild_id)
+        if player is not None and player.is_playing and player.paused:
+            await _handle_resume(ctx)
+            return
         await ctx.respond(
             t("play.error.no_url_and_nothing_playing", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,

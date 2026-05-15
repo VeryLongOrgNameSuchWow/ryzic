@@ -29,10 +29,8 @@ ephemeral graceful-failure path (see :func:`is_known_message`).
 from __future__ import annotations
 
 import logging
-from typing import cast
 
 import hikari
-import lavalink
 
 from . import lavalink_glue, ux
 from .i18n import t
@@ -200,12 +198,7 @@ async def refresh(bot: hikari.GatewayBot, guild_id: int) -> None:
 
 async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: int) -> None:
     """Pull current player state and render the controller into ``channel_id``."""
-    ll_client = lavalink_glue.get_lavalink_client()
-    if ll_client is None:
-        await _render_idle(bot, guild_id, channel_id)
-        return
-
-    player = cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
+    player = lavalink_glue.get_player(guild_id)
     if player is None or player.current is None:
         await _render_idle(bot, guild_id, channel_id)
         return

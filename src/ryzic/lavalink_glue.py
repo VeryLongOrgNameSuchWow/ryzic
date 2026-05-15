@@ -97,6 +97,19 @@ def get_lavalink_client() -> lavalink.Client | None:
     return _ll_client
 
 
+def get_player(guild_id: int) -> lavalink.DefaultPlayer | None:
+    """Return the player for ``guild_id``, or ``None`` if no Lavalink
+    client is connected or no player exists for that guild.
+
+    Encapsulates the cast against lavalink.py's untyped ``PlayerManager.get``
+    return so command modules don't each repeat it.
+    """
+    ll_client = get_lavalink_client()
+    if ll_client is None:
+        return None
+    return cast(lavalink.DefaultPlayer | None, ll_client.player_manager.get(guild_id))
+
+
 async def wait_for_voice_ready(guild_id: int, timeout: float = VOICE_READY_TIMEOUT_SECONDS) -> bool:
     """Block until our own voice state for ``guild_id`` has been forwarded.
 
@@ -157,10 +170,7 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> No
     if auto_leave_tasks.get(guild_id) is asyncio.current_task():
         del auto_leave_tasks[guild_id]
 
-    client = _ll_client
-    if client is None:
-        return
-    player = client.player_manager.get(guild_id)
+    player = get_player(guild_id)
     if player is None or not player.is_connected:
         return
 
@@ -587,7 +597,7 @@ async def _on_guild_leave(event: hikari.GuildLeaveEvent) -> None:
     client = _ll_client
     if client is not None:
         try:
-            player = cast(lavalink.DefaultPlayer | None, client.player_manager.get(guild_id))
+            player = get_player(guild_id)
             if player is not None:
                 await clear_queue_releasing(player)
             await client.player_manager.destroy(guild_id)
