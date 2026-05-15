@@ -386,15 +386,7 @@ def build_simple_now_playing_embed(
     """
     raw_line = format_now_playing_line(track, position_ms, paused=paused, locale=locale)
     line = safe_truncate(raw_line, EMBED_DESCRIPTION_MAX)
-    uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
-    embed = hikari.Embed(title=t("ux.np.title.playing", locale=locale), description=line)
-    embed.set_footer(
-        safe_truncate(
-            t("ux.np.footer.by_uploader", locale=locale, uploader=uploader),
-            EMBED_FOOTER_MAX,
-        )
-    )
-    return embed
+    return hikari.Embed(title=t("ux.np.title.playing", locale=locale), description=line)
 
 
 def build_queue_embed(
@@ -559,13 +551,6 @@ def build_now_playing_embed(
         name=t("ux.np.field.up_next.name", locale=locale),
         value=t("ux.np.field.up_next.value", locale=locale, count=queue_length),
         inline=True,
-    )
-    uploader = safe_truncate(escape_markdown(track.uploader), EMBED_FOOTER_MAX // 4)
-    embed.set_footer(
-        safe_truncate(
-            t("ux.np.footer.by_uploader", locale=locale, uploader=uploader),
-            EMBED_FOOTER_MAX,
-        )
     )
     return embed
 

@@ -32,7 +32,6 @@
       "one": "1 track",
       "many": "%{count} tracks"
     },
-    "ux.np.footer.by_uploader": "by %{uploader}",
     "ux.np.idle.description": "No tracks playing. Use /play to queue something.",
 
     "ux.queue.title": {
