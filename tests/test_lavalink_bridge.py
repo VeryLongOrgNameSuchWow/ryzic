@@ -1365,6 +1365,86 @@ async def test_websocket_closed_4014_broadcasts_voice_lost_from_catalog() -> Non
     assert bot.created_messages[0][1] == "Voice connection lost. Queue cleared."
 
 
+async def test_websocket_closed_4014_skips_broadcast_on_intentional_disconnect() -> None:
+    """When disconnect is intentional (Leave button, /leave, auto-leave), skip voice_lost.
+
+    Regression for #170: the Leave button and /leave were triggering "Voice
+    connection lost" broadcasts alongside their intentional-leave messages.
+    """
+    from ryzic import audio_cache
+
+    @dataclass
+    class _WsClosedEvent:
+        player: _QueuePlayer
+        code: int = 4014
+        reason: str = "Disconnected"
+        by_remote: bool = True
+
+    fake = RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        lavalink_glue.last_play_channel[111] = 999
+        handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        player = _QueuePlayer(
+            queue=[_IdTrack(identifier="/var/cache/ryzic/audio/int/intentional.audio")]
+        )
+
+        # Mark disconnect as intentional before the WebSocket close fires
+        lavalink_glue._mark_intentional_disconnect(111)
+
+        await handler.on_websocket_closed(
+            cast(lavalink.WebSocketClosedEvent, _WsClosedEvent(player=player)),
+        )
+
+        # No voice_lost broadcast — the disconnect was intentional
+        assert bot.created_messages == []
+        # Queue still cleared (for auto-leave case; /leave already cleared it)
+        assert fake.released == ["intentional"]
+        assert player.queue == []
+        # Marker cleared after processing
+        assert 111 not in lavalink_glue._pending_intentional_disconnects
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_intentional_disconnect_marker_lifecycle() -> None:
+    """The marker can be set, checked, and cleared."""
+    lavalink_glue._mark_intentional_disconnect(111)
+    assert 111 in lavalink_glue._pending_intentional_disconnects
+
+    lavalink_glue._clear_intentional_disconnect(111)
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+
+    # Clearing a non-existent marker is safe (idempotent)
+    lavalink_glue._clear_intentional_disconnect(222)
+    assert 222 not in lavalink_glue._pending_intentional_disconnects
+
+
+async def test_websocket_closed_4014_clears_intentional_disconnect_marker() -> None:
+    """The marker is cleared even if no broadcast happens."""
+
+    @dataclass
+    class _WsClosedEvent:
+        player: _QueuePlayer
+        code: int = 4014
+        reason: str = "Disconnected"
+        by_remote: bool = True
+
+    bot = _FakeApp()
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+
+    lavalink_glue._mark_intentional_disconnect(111)
+    assert 111 in lavalink_glue._pending_intentional_disconnects
+
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent(player=_QueuePlayer())),
+    )
+
+    # Marker cleared after processing
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+
+
 async def test_node_disconnected_broadcasts_node_reconnecting_from_catalog() -> None:
     """NodeDisconnected path posts the catalog rendering, once per guild."""
 

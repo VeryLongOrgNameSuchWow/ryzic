@@ -56,6 +56,8 @@ async def _handle_leave(ctx: lightbulb.Context) -> None:
     await lavalink_glue.clear_queue_releasing(player)
 
     bot = cast(hikari.GatewayBot, ctx.client.app)
+    # Mark as intentional so on_websocket_closed skips voice_lost broadcast.
+    lavalink_glue._mark_intentional_disconnect(guild_id)
     await bot.update_voice_state(guild_id, None)
 
     await now_playing.teardown(bot, guild_id)
