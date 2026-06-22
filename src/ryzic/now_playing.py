@@ -29,6 +29,7 @@ ephemeral graceful-failure path (see :func:`is_known_message`).
 from __future__ import annotations
 
 import logging
+import time
 
 import hikari
 
@@ -68,6 +69,12 @@ _LABEL_LEAVE = t("controller.button.leave", locale="en_US")
 # and an extra registry layer would be ceremony. Tests reset via
 # :func:`_reset_state_for_test`.
 _controllers: dict[int, tuple[int, int]] = {}
+
+# Per-guild last bump time (unix timestamp). Rate-limits controller reposts
+# so broadcasts don't spam the channel. 60s minimum between bumps (balances
+# keeping the controller visible vs. avoiding notification noise).
+_last_bump_time: dict[int, float] = {}
+MIN_BUMP_INTERVAL = 60.0
 
 
 def is_known_message(guild_id: int, message_id: int) -> bool:
@@ -312,6 +319,79 @@ async def teardown(bot: hikari.GatewayBot, guild_id: int) -> None:
         )
 
 
+async def bump_if_needed(bot: hikari.GatewayBot, guild_id: int) -> None:
+    """Repost the controller at channel bottom if rate limit allows.
+
+    Called from ``lavalink_glue._send_to_last_play_channel`` after a broadcast
+    message posts. When enough time has passed since the last bump (60s minimum),
+    this deletes the old controller message and posts a fresh one at the channel
+    bottom, keeping the controller visible below the broadcast.
+
+    Best-effort: if deletion or posting fails, we log and return. The old
+    controller remains functional (buttons still work until it scrolls too far).
+    No-op when the guild has no active controller.
+    """
+    record = _controllers.get(guild_id)
+    if record is None:
+        return
+
+    # Rate limit: at most one bump per minute per guild
+    now = time.time()
+    last = _last_bump_time.get(guild_id, 0.0)
+    if now - last < MIN_BUMP_INTERVAL:
+        return
+
+    channel_id, old_message_id = record
+
+    # Render current player state
+    player = lavalink_glue.get_player(guild_id)
+    if player is None or player.current is None:
+        embed = ux.build_now_playing_idle_embed(locale="en_US")
+        components = _build_idle_components()
+    else:
+        info = ux.get_track_info(player.current)
+        if info is None:
+            embed = ux.build_now_playing_idle_embed(locale="en_US")
+            components = _build_idle_components()
+        else:
+            embed = ux.build_now_playing_embed(
+                info,
+                position_ms=player.position,
+                paused=player.paused,
+                queue_length=len(player.queue),
+                locale="en_US",
+            )
+            components = _build_components_paused() if player.paused else _build_components()
+
+    # Delete old controller (best-effort)
+    try:
+        await bot.rest.delete_message(channel_id, old_message_id)
+    except hikari.NotFoundError:
+        pass  # Already deleted, that's fine
+    except hikari.HikariError:
+        _log.warning(
+            "guild=%d failed to delete old controller %d/%d for bump; continuing",
+            guild_id,
+            channel_id,
+            old_message_id,
+        )
+
+    # Post fresh controller at bottom
+    try:
+        message = await bot.rest.create_message(channel_id, embed=embed, components=components)
+    except hikari.HikariError:
+        _log.exception(
+            "guild=%d failed to post bumped controller in channel %d",
+            guild_id,
+            channel_id,
+        )
+        return
+
+    _controllers[guild_id] = (channel_id, int(message.id))
+    _last_bump_time[guild_id] = now
+
+
 def _reset_state_for_test() -> None:
     """Test-only: clear all per-guild controller state."""
     _controllers.clear()
+    _last_bump_time.clear()
