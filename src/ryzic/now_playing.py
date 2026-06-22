@@ -28,9 +28,9 @@ ephemeral graceful-failure path (see :func:`is_known_message`).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-import asyncio
 
 import hikari
 
@@ -205,18 +205,26 @@ async def refresh(bot: hikari.GatewayBot, guild_id: int) -> None:
 
 
 async def refresh_all(bot: hikari.GatewayBot) -> None:
-    """Refresh all active controllers.
+    """Refresh all active controllers whose progress is actually moving.
 
-    Used by the bot's background loop to advance progress bars.
-    Staggers updates to avoid API burst limits.
+    Used by the bot's background loop to advance progress bars. Skips
+    paused / idle / disconnected players so we don't issue byte-identical
+    edits every cycle (their state only changes via an event, which
+    already routes through :func:`refresh`). Staggers updates to spread
+    concurrent in-flight REST requests.
     """
     for guild_id in list(_controllers.keys()):
+        player = lavalink_glue.get_player(guild_id)
+        if player is None or player.paused or player.current is None:
+            continue
         try:
             await refresh(bot, guild_id)
             await asyncio.sleep(0.1)
         except Exception:
-            # refresh() handles its own logging for expected errors.
-            pass
+            # refresh()/_post_or_edit already logs HikariErrors (the
+            # expected REST failures). Anything reaching here is an
+            # unexpected bug — log it so it isn't silently lost.
+            _log.debug("periodic refresh failed for guild %d", guild_id, exc_info=True)
 
 
 async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: int) -> None:

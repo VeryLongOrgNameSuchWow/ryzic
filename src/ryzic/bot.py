@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 
@@ -18,10 +19,6 @@ _log = logging.getLogger(__name__)
 # inside ``cfg.cache_dir``. Kept as a module constant so tests can refer
 # to the same name without hard-coding a literal in two places.
 _COOKIES_SCRATCH_FILENAME = "youtube-cookies.txt"
-
-# Background task that periodically refreshes now-playing controllers.
-# Stored at module level so shutdown can cancel it cleanly.
-_refresh_task: asyncio.Task[None] | None = None
 
 
 def _build_client(bot: hikari.GatewayBot, cfg: config.Config) -> lightbulb.Client:
@@ -144,9 +141,10 @@ def main() -> None:
     now_playing_buttons.register_listener(bot)
 
     cache: audio_cache.AudioCache | None = None
+    refresh_task: asyncio.Task[None] | None = None
 
     async def _on_starting(_: hikari.StartingEvent) -> None:
-        nonlocal cache
+        nonlocal cache, refresh_task
         # Audio cache must be ready BEFORE /play runs — start it before
         # syncing the slash commands so a fast user invocation can
         # never race the bootstrap.
@@ -165,14 +163,15 @@ def main() -> None:
             "ryzic.commands.replay",
             "ryzic.commands.np",
         )
-        global _refresh_task
-        _refresh_task = bot.loop.create_task(_update_controllers_loop(bot))
+        refresh_task = asyncio.create_task(_update_controllers_loop(bot))
         await client.start()
 
     async def _on_stopping(_: hikari.StoppingEvent) -> None:
         await client.stop()
-        if _refresh_task is not None:
-            _refresh_task.cancel()
+        if refresh_task is not None:
+            refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await refresh_task
         if cache is not None:
             audio_cache.set_audio_cache(None)
             await cache.close()
