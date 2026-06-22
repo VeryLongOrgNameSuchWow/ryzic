@@ -195,6 +195,7 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> No
     try:
         await bot.update_voice_state(guild_id, None)
     except Exception:
+        _clear_intentional_disconnect(guild_id)
         _log.exception("auto-leave: failed to disconnect from guild %d", guild_id)
 
     _reset_voice_ready(guild_id)
@@ -477,7 +478,7 @@ class EventHandler:
         # the voice_lost broadcast. The leave handlers already cleaned up
         # and sent their own message.
         if guild_id in _pending_intentional_disconnects:
-            _pending_intentional_disconnects.discard(guild_id)
+            _clear_intentional_disconnect(guild_id)
             await clear_queue_releasing(cast(lavalink.DefaultPlayer, event.player))
             _cancel_auto_leave(guild_id)
             _reset_voice_ready(guild_id)
@@ -622,6 +623,7 @@ async def _on_guild_leave(event: hikari.GuildLeaveEvent) -> None:
     _cancel_auto_leave(guild_id)
     last_play_channel.pop(guild_id, None)
     _voice_ready_events.pop(guild_id, None)
+    _clear_intentional_disconnect(guild_id)
     from . import now_playing
 
     # No REST teardown — the bot has just lost its messages-write
