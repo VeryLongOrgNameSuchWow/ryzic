@@ -82,6 +82,12 @@ last_play_channel: dict[int, int] = {}
 auto_leave_tasks: dict[int, asyncio.Task[None]] = {}
 _voice_ready_events: dict[int, asyncio.Event] = {}
 
+# Guilds with pending intentional disconnects. When the bot initiates a
+# disconnect (Leave button, /leave, auto-leave), we mark the guild here so
+# the subsequent WebSocket 4014 close event knows not to broadcast
+# "voice_lost" — the disconnect was intentional, not a network failure.
+_pending_intentional_disconnects: set[int] = set()
+
 
 # Singleton lavalink client. Constructed on the first ``ShardReadyEvent``
 # (needs the bot's user id).
@@ -137,6 +143,16 @@ def _reset_voice_ready(guild_id: int) -> None:
     _voice_ready_events.pop(guild_id, None)
 
 
+def _mark_intentional_disconnect(guild_id: int) -> None:
+    """Mark a guild's disconnect as intentional so on_websocket_closed skips voice_lost."""
+    _pending_intentional_disconnects.add(guild_id)
+
+
+def _clear_intentional_disconnect(guild_id: int) -> None:
+    """Clear an intentional disconnect marker (called after WebSocket close processed)."""
+    _pending_intentional_disconnects.discard(guild_id)
+
+
 def _cancel_auto_leave(guild_id: int) -> None:
     task = auto_leave_tasks.pop(guild_id, None)
     if task is not None and not task.done():
@@ -174,6 +190,8 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> No
     if player is None or not player.is_connected:
         return
 
+    # Mark as intentional so on_websocket_closed skips voice_lost broadcast.
+    _mark_intentional_disconnect(guild_id)
     try:
         await bot.update_voice_state(guild_id, None)
     except Exception:
@@ -454,6 +472,22 @@ class EventHandler:
         )
         if event.code != 4014:
             return
+
+        # Intentional disconnect (Leave button, /leave, auto-leave) — skip
+        # the voice_lost broadcast. The leave handlers already cleaned up
+        # and sent their own message.
+        if guild_id in _pending_intentional_disconnects:
+            _pending_intentional_disconnects.discard(guild_id)
+            await clear_queue_releasing(cast(lavalink.DefaultPlayer, event.player))
+            _cancel_auto_leave(guild_id)
+            _reset_voice_ready(guild_id)
+            from . import now_playing
+
+            await now_playing.teardown(self._bot, guild_id)
+            return
+
+        # Unintentional disconnect (kicked, channel deleted, region migrated).
+        # Broadcast voice_lost and teardown.
         await clear_queue_releasing(cast(lavalink.DefaultPlayer, event.player))
         _cancel_auto_leave(guild_id)
         _reset_voice_ready(guild_id)
@@ -680,3 +714,4 @@ def _reset_state_for_test() -> None:
     auto_leave_tasks.clear()
     _auto_leave_seconds = DEFAULT_AUTO_LEAVE_SECONDS
     _voice_ready_events.clear()
+    _pending_intentional_disconnects.clear()
