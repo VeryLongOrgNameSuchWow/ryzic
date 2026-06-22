@@ -41,7 +41,7 @@ async def _handle_seek(ctx: lightbulb.Context, raw_position: str) -> None:
     guild_id = cast(int, ctx.guild_id)
 
     player = lavalink_glue.get_player(guild_id)
-    if player is None or not player.is_playing or player.current is None:
+    if player is None or player.current is None:
         await ctx.respond(
             t("np.error.nothing_playing", locale=locale_for_ephemeral(ctx)),
             ephemeral=True,

@@ -177,6 +177,27 @@ async def test_bare_seconds_treated_as_absolute() -> None:
     assert player.seek_calls == [45_000]
 
 
+async def test_seek_while_paused_works() -> None:
+    """Regression test for #143: /seek should work on paused tracks."""
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = FakeAudioTrack(duration=213_000)
+    player.position = 60_000  # Currently at 1 minute
+    player.paused = True  # Paused!
+
+    await seek_module._handle_seek(ctx, "2:00")
+
+    # Should seek to 2 minutes, NOT return "Nothing is playing"
+    assert player.seek_calls == [120_000]
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("seek.success.jumped", locale="en_US", position="2:00")
+    assert "ephemeral" not in fake.responses[0][1]
+
+
 def test_seek_loader_registered() -> None:
     assert seek_module.Seek._command_data.name == "seek"
     assert seek_module.Seek._command_data.description == t(
