@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import shutil
 
@@ -9,7 +11,7 @@ import dotenv
 import hikari
 import lightbulb
 
-from . import audio_cache, config, lavalink_glue, now_playing_buttons, ytdlp
+from . import audio_cache, config, lavalink_glue, now_playing, now_playing_buttons, ytdlp
 
 _log = logging.getLogger(__name__)
 
@@ -106,6 +108,18 @@ async def _bootstrap_audio_cache(cfg: config.Config) -> audio_cache.AudioCache:
     return cache
 
 
+async def _update_controllers_loop(bot: hikari.GatewayBot) -> None:
+    """Periodically refresh the now-playing controllers to advance progress bars."""
+    while True:
+        try:
+            await asyncio.sleep(15)
+            await now_playing.refresh_all(bot)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            _log.exception("periodic controller refresh loop failed")
+
+
 def main() -> None:
     dotenv.load_dotenv()
     cfg = config.load()
@@ -127,9 +141,10 @@ def main() -> None:
     now_playing_buttons.register_listener(bot)
 
     cache: audio_cache.AudioCache | None = None
+    refresh_task: asyncio.Task[None] | None = None
 
     async def _on_starting(_: hikari.StartingEvent) -> None:
-        nonlocal cache
+        nonlocal cache, refresh_task
         # Audio cache must be ready BEFORE /play runs — start it before
         # syncing the slash commands so a fast user invocation can
         # never race the bootstrap.
@@ -148,10 +163,15 @@ def main() -> None:
             "ryzic.commands.replay",
             "ryzic.commands.np",
         )
+        refresh_task = asyncio.create_task(_update_controllers_loop(bot))
         await client.start()
 
     async def _on_stopping(_: hikari.StoppingEvent) -> None:
         await client.stop()
+        if refresh_task is not None:
+            refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await refresh_task
         if cache is not None:
             audio_cache.set_audio_cache(None)
             await cache.close()

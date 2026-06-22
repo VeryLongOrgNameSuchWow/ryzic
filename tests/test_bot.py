@@ -10,11 +10,13 @@ without the writable scratch copy this helper produces.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import hikari
 import pytest
 
 from ryzic import bot, config, ytdlp
@@ -193,3 +195,26 @@ def test_install_cookies_creates_cache_dir_if_missing(tmp_path: Path) -> None:
     cfg = _make_cfg(cache_dir=cache_dir, cookies_path=source)
     bot._install_youtube_cookies(cfg)
     assert cache_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_update_controllers_loop_refreshes_active_controllers() -> None:
+    """The loop calls refresh_all once per cycle and exits on cancellation."""
+    bot_mock = MagicMock(spec=hikari.GatewayBot)
+
+    # refresh_all is patched out, so each cycle is exactly one sleep + one
+    # refresh_all. The second sleep raises CancelledError to break the loop
+    # after one completed iteration.
+    call_count = 0
+
+    async def counting_refresh_all(bot):
+        nonlocal call_count
+        call_count += 1
+
+    with (
+        patch("ryzic.now_playing.refresh_all", side_effect=counting_refresh_all),
+        patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]),
+    ):
+        await bot._update_controllers_loop(bot_mock)
+
+    assert call_count == 1
