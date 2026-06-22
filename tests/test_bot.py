@@ -10,14 +10,17 @@ without the writable scratch copy this helper produces.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
 
+import hikari
 import pytest
 
 from ryzic import bot, config, ytdlp
+from ryzic import now_playing
 
 
 def _make_cfg(cache_dir: Path, cookies_path: Path | None) -> config.Config:
@@ -193,3 +196,30 @@ def test_install_cookies_creates_cache_dir_if_missing(tmp_path: Path) -> None:
     cfg = _make_cfg(cache_dir=cache_dir, cookies_path=source)
     bot._install_youtube_cookies(cfg)
     assert cache_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_update_controllers_loop_refreshes_active_controllers() -> None:
+    """The loop periodically calls refresh for all recorded controllers."""
+    bot_mock = MagicMock(spec=hikari.GatewayBot)
+
+    # Setup controllers
+    now_playing._controllers = {111: (555, 9001), 222: (666, 9002)}
+
+    # Test by making the loop iterate once: first sleep returns immediately,
+    # second sleep raises CancelledError to break the loop.
+    call_count = 0
+
+    async def counting_refresh_all(bot):
+        nonlocal call_count
+        call_count += 1
+
+    with patch("ryzic.now_playing.refresh_all", side_effect=counting_refresh_all):
+        # side_effect: first sleep(15) returns None, second sleep(0.1) raises CancelledError
+        with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+            try:
+                await bot._update_controllers_loop(bot_mock)
+            except asyncio.CancelledError:
+                pass
+
+    assert call_count >= 1

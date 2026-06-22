@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
 
 import hikari
 
@@ -201,6 +202,21 @@ async def refresh(bot: hikari.GatewayBot, guild_id: int) -> None:
         return
     channel_id = record[0]
     await _render_for_player(bot, guild_id, channel_id)
+
+
+async def refresh_all(bot: hikari.GatewayBot) -> None:
+    """Refresh all active controllers.
+
+    Used by the bot's background loop to advance progress bars.
+    Staggers updates to avoid API burst limits.
+    """
+    for guild_id in list(_controllers.keys()):
+        try:
+            await refresh(bot, guild_id)
+            await asyncio.sleep(0.1)
+        except Exception:
+            # refresh() handles its own logging for expected errors.
+            pass
 
 
 async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: int) -> None:

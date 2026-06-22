@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 
@@ -9,7 +10,7 @@ import dotenv
 import hikari
 import lightbulb
 
-from . import audio_cache, config, lavalink_glue, now_playing_buttons, ytdlp
+from . import audio_cache, config, lavalink_glue, now_playing, now_playing_buttons, ytdlp
 
 _log = logging.getLogger(__name__)
 
@@ -17,6 +18,10 @@ _log = logging.getLogger(__name__)
 # inside ``cfg.cache_dir``. Kept as a module constant so tests can refer
 # to the same name without hard-coding a literal in two places.
 _COOKIES_SCRATCH_FILENAME = "youtube-cookies.txt"
+
+# Background task that periodically refreshes now-playing controllers.
+# Stored at module level so shutdown can cancel it cleanly.
+_refresh_task: asyncio.Task[None] | None = None
 
 
 def _build_client(bot: hikari.GatewayBot, cfg: config.Config) -> lightbulb.Client:
@@ -106,6 +111,18 @@ async def _bootstrap_audio_cache(cfg: config.Config) -> audio_cache.AudioCache:
     return cache
 
 
+async def _update_controllers_loop(bot: hikari.GatewayBot) -> None:
+    """Periodically refresh the now-playing controllers to advance progress bars."""
+    while True:
+        try:
+            await asyncio.sleep(15)
+            await now_playing.refresh_all(bot)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            _log.exception("periodic controller refresh loop failed")
+
+
 def main() -> None:
     dotenv.load_dotenv()
     cfg = config.load()
@@ -148,10 +165,14 @@ def main() -> None:
             "ryzic.commands.replay",
             "ryzic.commands.np",
         )
+        global _refresh_task
+        _refresh_task = bot.loop.create_task(_update_controllers_loop(bot))
         await client.start()
 
     async def _on_stopping(_: hikari.StoppingEvent) -> None:
         await client.stop()
+        if _refresh_task is not None:
+            _refresh_task.cancel()
         if cache is not None:
             audio_cache.set_audio_cache(None)
             await cache.close()
