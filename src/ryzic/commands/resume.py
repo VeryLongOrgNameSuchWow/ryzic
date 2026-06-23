@@ -9,7 +9,7 @@ import lightbulb
 
 from .. import lavalink_glue, now_playing
 from ..i18n import locale_for_ephemeral, locale_for_public, t
-from ..voice_check import ensure_same_voice
+from ..voice_check import check_player_or_respond, ensure_same_voice
 
 loader = lightbulb.Loader()
 
@@ -33,11 +33,8 @@ async def _handle_resume(ctx: lightbulb.Context) -> None:
     guild_id = cast(int, ctx.guild_id)
 
     player = lavalink_glue.get_player(guild_id)
-    if player is None or player.current is None:
-        await ctx.respond(
-            t("np.error.nothing_playing", locale=locale_for_ephemeral(ctx)),
-            ephemeral=True,
-        )
+    player = await check_player_or_respond(ctx, player)
+    if player is None:
         return
 
     if not player.paused:

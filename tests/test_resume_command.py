@@ -115,6 +115,28 @@ async def test_resume_success_is_public() -> None:
     assert "ephemeral" not in fake.responses[0][1]
 
 
+async def test_resume_disconnected_but_current_responds_reconnecting() -> None:
+    """#215: reject with reconnecting copy when Lavalink reports disconnected
+    but still holds a stale ``current`` — do NOT proceed to ``set_pause``.
+    """
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = False
+    player.current = FakeAudioTrack()
+    player.paused = True
+
+    await resume_module._handle_resume(ctx)
+
+    assert player.set_pause_calls == []
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.reconnecting", locale="en_US")
+    assert fake.responses[0][0] == "Reconnecting to voice — try again in a moment."
+    assert fake.responses[0][1].get("ephemeral") is True
+
+
 def test_resume_loader_registered() -> None:
     assert resume_module.Resume._command_data.name == "resume"
     assert resume_module.Resume._command_data.description == t(
