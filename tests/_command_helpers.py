@@ -159,6 +159,10 @@ class FakePlayer:
 
     @property
     def is_playing(self) -> bool:
+        # Intentionally mirrors real ``lavalink.DefaultPlayer.is_playing``
+        # (``is_connected and current is not None`` — no ``paused`` term).
+        # Do NOT "fix" this to return False when paused; that would diverge
+        # from lavalink semantics and mask guard-policy regressions.
         return self.is_connected and self.current is not None
 
     async def set_pause(self, pause: bool) -> None:
