@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.6.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.4...v0.6.0) (2026-06-23)
+
+
+### Features
+
+* **controller:** rename "Leave" button to "Stop & leave" ([#176](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/176)) ([b37f634](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/b37f6342d3b4569273cde8129fc9d929ddde6ecd)), closes [#174](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/174)
+* **i18n:** catalog-drift CI lint + CONTRIBUTING.md i18n section ([#164](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/164)) ([bcbcb26](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/bcbcb26152000add9fef34271004f8e1824fd566))
+* **i18n:** migrate lavalink_glue broadcasts ([#162](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/162)) ([1ec9b25](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/1ec9b25d943c8e6d839968582c772add66119019))
+* **i18n:** migrate now_playing controller + button labels; rename Stop button to Leave ([#147](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/147)) ([#161](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/161)) ([bac5752](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/bac57523506798da71a56d5807039e3183804fb3))
+* **i18n:** migrate np + seek; rename /np to /nowplaying ([#150](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/150)); rewrite /seek param description ([#151](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/151)) ([#158](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/158)) ([fb46224](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/fb46224da2671fd53f5a7deb994970f8c6308e6c))
+* **i18n:** migrate play.py (catalog only) ([#160](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/160)) ([59a35a6](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/59a35a6af1dc8c6812daf67a5198891ac2d8a0f4))
+* **i18n:** migrate queue + flip ephemeral default ([#148](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/148)) ([#159](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/159)) ([b52d49a](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/b52d49a9ee7d1fe104b417c2551e5bdca9a2ca1b))
+* **i18n:** migrate small commands bundle ([#157](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/157)) ([38756d9](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/38756d990e2837fad20e4002eecae6e754239fc1))
+* **i18n:** migrate ux.py builders to catalog ([#155](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/155)) ([950821c](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/950821cc6f1282338a32d67a116f073f599168fd))
+* **i18n:** migrate voice_check + shared error keys ([#156](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/156)) ([bf30cf7](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/bf30cf7860d93d1a7dae8361b53cb7ad83db7abb))
+* **i18n:** migrate ytdlp.py; change FetchFailed contract to carry key + vars ([#163](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/163)) ([5992914](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/599291427199e9a76f456d14d51a0c5830a798c7))
+* **i18n:** scaffold i18nice helper + en_US catalog ([#153](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/153)) ([b1a2da0](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/b1a2da04354fc245ec992a3dd442a46a1521d2c9))
+* **i18n:** separate voice-handshake-failure copy from audio-service-down ([#166](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/166)) ([429dc76](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/429dc760498cf345db156d911c70a43dab135cb0)), closes [#144](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/144)
+* **i18n:** show example URL in unsupported-URL error ([#165](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/165)) ([1c95bd1](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/1c95bd120218c4b8474f86c771e53fe0a0b2efbb)), closes [#145](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/145)
+* **play:** /play with no argument resumes paused track ([#167](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/167)) ([ada8060](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/ada8060a300e6fdbcdca5749f1f2c9a56c23aa32)), closes [#146](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/146)
+* **play:** first-play tip-footer points newcomers at the controller buttons ([#168](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/168)) ([e5ea247](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/e5ea2472e55875839e92157fb047f4149f94848f)), closes [#152](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/152)
+* **ux:** drop "by {uploader}" line from now-playing embed ([#177](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/177)) ([9f3c894](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/9f3c8941748692f9752263eee1e1a1035b69ca25)), closes [#173](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/173)
+
+
+### Bug Fixes
+
+* **commands:** align /nowplaying ephemeral default with /queue ([#207](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/207)) ([618ca0d](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/618ca0dabcb93728ae14c597091951746d1aedf6))
+* **commands:** allow pause/resume/seek/skip on paused tracks ([#196](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/196)) ([3a0e62e](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/3a0e62e0d1e62e1dc6c9e226fb9e7e4684bb1c70)), closes [#143](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/143)
+* **commands:** reconnecting copy when Lavalink player disconnected ([#215](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/215)) ([2af04a4](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/2af04a4051327da17b320f5ebc7a334918ff10cd))
+* **lavalink_glue:** bound and clear intentional-disconnect marker ([#203](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/203)) ([59b0022](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/59b002241b60c11c583a10b5ba78d05e6c64903a))
+* **lavalink_glue:** clean up intentional-disconnect marker on error paths ([#198](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/198)) ([fc151ad](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/fc151ad30d75e41a43032d0a7422dafa8fb15b2b))
+* **lavalink_glue:** skip voice_lost broadcast on intentional disconnects ([#197](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/197)) ([cf24312](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/cf24312534e52551e4de9ecd6a3c5778470f0350)), closes [#170](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/170)
+* **now_playing:** bump controller to channel bottom after broadcasts ([#199](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/199)) ([8d516ac](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/8d516ac1baf638ffb9514eaf8d220ea33bcd499a)), closes [#171](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/171)
+* periodially refresh now-playing controllers so progress advances ([#172](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/172)) ([#200](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/200)) ([1687730](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/16877308bf813a7cd9d127055236696f9ec738ae))
+
+
+### Documentation
+
+* refresh README, smoke-tests, docstrings ([#206](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/206)) ([f28e466](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/f28e4661ca9cc3c506defc6e39315b313a9c6150))
+
 ## [0.5.4](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.3...v0.5.4) (2026-05-08)
 
 
