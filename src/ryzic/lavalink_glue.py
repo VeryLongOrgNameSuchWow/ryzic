@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from pathlib import Path
 from typing import cast
 
@@ -59,6 +60,17 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_AUTO_LEAVE_SECONDS = 300
 VOICE_READY_TIMEOUT_SECONDS = 5.0
+
+# Bounds the leak window for the intentional-disconnect marker. The marker is
+# set just before ``bot.update_voice_state(guild_id, None)``; the resulting
+# WebSocket 4014 close arrives sub-second later, so 30s is generous. Two leak
+# modes the structural clears don't reach: (a) a non-4014 voice close (4006 /
+# 4009 / 4011 / 4012 / 4015) lands before the 4014, (b) the 4014 never arrives
+# at all (``update_voice_state`` no-op, lost close). Without a TTL the marker
+# sits forever and the next genuine disconnect misclassifies as intentional,
+# silently suppressing ``voice_lost``. A >30s-delayed 4014 may produce a
+# spurious ``voice_lost`` — strictly better than today's silent skip.
+INTENTIONAL_DISCONNECT_TTL_SECONDS: float = 30.0
 
 # Mutated once at startup by ``register_listeners`` from ``cfg.auto_leave_seconds``.
 # Module-level by design (mirrors the ``_ll_client`` singleton): the auto-leave
@@ -82,11 +94,14 @@ last_play_channel: dict[int, int] = {}
 auto_leave_tasks: dict[int, asyncio.Task[None]] = {}
 _voice_ready_events: dict[int, asyncio.Event] = {}
 
-# Guilds with pending intentional disconnects. When the bot initiates a
-# disconnect (Leave button, /leave, auto-leave), we mark the guild here so
-# the subsequent WebSocket 4014 close event knows not to broadcast
-# "voice_lost" — the disconnect was intentional, not a network failure.
-_pending_intentional_disconnects: set[int] = set()
+# Guilds with pending intentional disconnects, keyed by guild_id to the
+# ``time.monotonic()`` stamp recorded when the disconnect was initiated.
+# When the bot initiates a disconnect (Leave button, /leave, auto-leave), we
+# mark the guild here so the subsequent WebSocket 4014 close event knows not
+# to broadcast "voice_lost" — the disconnect was intentional, not a network
+# failure. Entries are bounded by ``INTENTIONAL_DISCONNECT_TTL_SECONDS`` and
+# garbage-collected lazily by ``_gc_intentional_disconnects``.
+_pending_intentional_disconnects: dict[int, float] = {}
 
 
 # Singleton lavalink client. Constructed on the first ``ShardReadyEvent``
@@ -143,14 +158,43 @@ def _reset_voice_ready(guild_id: int) -> None:
     _voice_ready_events.pop(guild_id, None)
 
 
-def _mark_intentional_disconnect(guild_id: int) -> None:
-    """Mark a guild's disconnect as intentional so on_websocket_closed skips voice_lost."""
-    _pending_intentional_disconnects.add(guild_id)
+def _gc_intentional_disconnects(now: float | None = None) -> None:
+    """Discard intentional-disconnect markers older than the TTL.
+
+    Called lazily at the top of ``on_websocket_closed`` and inside
+    ``_intentional_disconnect_is_pending`` so the leak window is bounded
+    without relying on a structural event arriving.
+    """
+    if now is None:
+        now = time.monotonic()
+    cutoff = now - INTENTIONAL_DISCONNECT_TTL_SECONDS
+    for gid, stamp in list(_pending_intentional_disconnects.items()):
+        if stamp < cutoff:
+            del _pending_intentional_disconnects[gid]
 
 
-def _clear_intentional_disconnect(guild_id: int) -> None:
-    """Clear an intentional disconnect marker (called after WebSocket close processed)."""
-    _pending_intentional_disconnects.discard(guild_id)
+def mark_intentional_disconnect(guild_id: int) -> None:
+    """Mark a guild's disconnect as intentional so on_websocket_closed skips voice_lost.
+
+    Cross-module API: called by ``commands.leave`` and the auto-leave timer
+    in this module just before ``bot.update_voice_state(guild_id, None)``.
+    """
+    _pending_intentional_disconnects[guild_id] = time.monotonic()
+
+
+def clear_intentional_disconnect(guild_id: int) -> None:
+    """Clear an intentional disconnect marker (idempotent; safe to call when none set)."""
+    _pending_intentional_disconnects.pop(guild_id, None)
+
+
+def _intentional_disconnect_is_pending(guild_id: int) -> bool:
+    """True if an intentional-disconnect marker for ``guild_id`` is still within TTL.
+
+    Runs lazy GC first so an expired marker cannot suppress a genuine
+    disconnect's ``voice_lost`` broadcast.
+    """
+    _gc_intentional_disconnects()
+    return guild_id in _pending_intentional_disconnects
 
 
 def _cancel_auto_leave(guild_id: int) -> None:
@@ -191,11 +235,11 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> No
         return
 
     # Mark as intentional so on_websocket_closed skips voice_lost broadcast.
-    _mark_intentional_disconnect(guild_id)
+    mark_intentional_disconnect(guild_id)
     try:
         await bot.update_voice_state(guild_id, None)
     except Exception:
-        _clear_intentional_disconnect(guild_id)
+        clear_intentional_disconnect(guild_id)
         _log.exception("auto-leave: failed to disconnect from guild %d", guild_id)
 
     _reset_voice_ready(guild_id)
@@ -337,6 +381,24 @@ async def clear_queue_releasing(player: lavalink.DefaultPlayer) -> None:
         await _release_track(track)
 
 
+async def _teardown_player_session(
+    bot: hikari.GatewayBot, guild_id: int, player: lavalink.DefaultPlayer
+) -> None:
+    """Run the full per-guild cleanup sequence shared by every teardown path.
+
+    Releases queued pins, cancels the auto-leave timer, drops the voice-ready
+    handshake event, and tears down the now-playing controller. Owns NO
+    broadcast — callers decide whether to post ``voice_lost`` /
+    ``node_reconnecting`` (the node path is per-guild deduped outside).
+    """
+    await clear_queue_releasing(player)
+    _cancel_auto_leave(guild_id)
+    _reset_voice_ready(guild_id)
+    from . import now_playing
+
+    await now_playing.teardown(bot, guild_id)
+
+
 def _safe_error_text(text: str | None) -> str:
     """Sanitise server-supplied error text before posting to a public channel.
 
@@ -471,35 +533,45 @@ class EventHandler:
             event.reason,
             event.by_remote,
         )
+        # Lazy GC bounds the lost-close / silent-no-op leak window before any
+        # membership check below reads stale state.
+        _gc_intentional_disconnects()
+
         if event.code != 4014:
+            # Non-4014 voice closes (4006/4009/4011/4012/4015) are transient
+            # or terminal-without-disconnect; they must not leave a marker
+            # behind, or the next genuine 4014 misclassifies as intentional
+            # and silently skips voice_lost. Do NOT clear above the 4014 path
+            # unconditionally — that would break #197 (the 4014 membership
+            # check would always be False → voice_lost always broadcasts).
+            clear_intentional_disconnect(guild_id)
             return
 
         # Intentional disconnect (Leave button, /leave, auto-leave) — skip
         # the voice_lost broadcast. The leave handlers already cleaned up
         # and sent their own message.
-        if guild_id in _pending_intentional_disconnects:
-            _clear_intentional_disconnect(guild_id)
-            await clear_queue_releasing(cast(lavalink.DefaultPlayer, event.player))
-            _cancel_auto_leave(guild_id)
-            _reset_voice_ready(guild_id)
-            from . import now_playing
-
-            await now_playing.teardown(self._bot, guild_id)
+        if _intentional_disconnect_is_pending(guild_id):
+            clear_intentional_disconnect(guild_id)
+            await _teardown_player_session(
+                self._bot, guild_id, cast(lavalink.DefaultPlayer, event.player)
+            )
             return
 
         # Unintentional disconnect (kicked, channel deleted, region migrated).
-        # Broadcast voice_lost and teardown.
-        await clear_queue_releasing(cast(lavalink.DefaultPlayer, event.player))
-        _cancel_auto_leave(guild_id)
-        _reset_voice_ready(guild_id)
+        # Broadcast voice_lost and teardown. The broadcast runs AFTER
+        # ``_teardown_player_session`` returns (i.e. after now_playing.teardown);
+        # this reorder vs. the pre-extraction order is safe because
+        # ``_send_to_last_play_channel`` and ``now_playing.teardown`` touch
+        # disjoint state.
+        await _teardown_player_session(
+            self._bot, guild_id, cast(lavalink.DefaultPlayer, event.player)
+        )
+        clear_intentional_disconnect(guild_id)
         await _send_to_last_play_channel(
             self._bot,
             guild_id,
             _broadcast_t("lavalink.broadcast.voice_lost"),
         )
-        from . import now_playing
-
-        await now_playing.teardown(self._bot, guild_id)
 
     @lavalink.listener(lavalink.NodeDisconnectedEvent)
     async def on_node_disconnected(self, event: lavalink.NodeDisconnectedEvent) -> None:
@@ -512,16 +584,15 @@ class EventHandler:
         client = _ll_client
         if client is None:
             return
-        from . import now_playing
 
         reconnect_message = _broadcast_t("lavalink.broadcast.node_reconnecting")
         notified: set[int] = set()
         for player in list(client.player_manager.values()):
             guild_id = player.guild_id
-            await clear_queue_releasing(cast(lavalink.DefaultPlayer, player))
-            _cancel_auto_leave(guild_id)
-            _reset_voice_ready(guild_id)
-            await now_playing.teardown(self._bot, guild_id)
+            await _teardown_player_session(
+                self._bot, guild_id, cast(lavalink.DefaultPlayer, player)
+            )
+            clear_intentional_disconnect(guild_id)
             if guild_id in notified:
                 continue
             notified.add(guild_id)
@@ -623,7 +694,7 @@ async def _on_guild_leave(event: hikari.GuildLeaveEvent) -> None:
     _cancel_auto_leave(guild_id)
     last_play_channel.pop(guild_id, None)
     _voice_ready_events.pop(guild_id, None)
-    _clear_intentional_disconnect(guild_id)
+    clear_intentional_disconnect(guild_id)
     from . import now_playing
 
     # No REST teardown — the bot has just lost its messages-write

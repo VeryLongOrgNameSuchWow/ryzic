@@ -36,7 +36,11 @@ def _on_missing_placeholder(key: str, locale: str, _template: str, name: str) ->
 
 def _configure() -> None:
     try:
-        i18n.load_path.append(str(_LOCALES_DIR))
+        # i18nice is a process-global singleton; ``load_path`` persists
+        # across ``_configure()`` re-invocations (tests re-run it). Guard
+        # the append so repeated calls don't accumulate duplicate entries.
+        if str(_LOCALES_DIR) not in i18n.load_path:
+            i18n.load_path.append(str(_LOCALES_DIR))
         i18n.set("filename_format", "{locale}.{format}")
         i18n.set("file_format", "json")
         i18n.set("fallback", _DEFAULT_LOCALE)
