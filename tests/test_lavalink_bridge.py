@@ -58,6 +58,10 @@ class _FakeApp:
             raise self._create_message_error
         self.created_messages.append((channel_id, content))
 
+    async def edit_message(self, *_: Any, **__: Any) -> None:
+        """Stand-in for ``hikari.RESTService.edit_message`` used by now_playing.teardown."""
+        return None
+
     async def update_voice_state(self, guild_id: int, channel_id: int | None) -> None:
         self.voice_state_calls.append((guild_id, channel_id))
 
@@ -1391,7 +1395,7 @@ async def test_websocket_closed_4014_skips_broadcast_on_intentional_disconnect()
         )
 
         # Mark disconnect as intentional before the WebSocket close fires
-        lavalink_glue._mark_intentional_disconnect(111)
+        lavalink_glue.mark_intentional_disconnect(111)
 
         await handler.on_websocket_closed(
             cast(lavalink.WebSocketClosedEvent, _WsClosedEvent(player=player)),
@@ -1410,14 +1414,14 @@ async def test_websocket_closed_4014_skips_broadcast_on_intentional_disconnect()
 
 async def test_intentional_disconnect_marker_lifecycle() -> None:
     """The marker can be set, checked, and cleared."""
-    lavalink_glue._mark_intentional_disconnect(111)
+    lavalink_glue.mark_intentional_disconnect(111)
     assert 111 in lavalink_glue._pending_intentional_disconnects
 
-    lavalink_glue._clear_intentional_disconnect(111)
+    lavalink_glue.clear_intentional_disconnect(111)
     assert 111 not in lavalink_glue._pending_intentional_disconnects
 
     # Clearing a non-existent marker is safe (idempotent)
-    lavalink_glue._clear_intentional_disconnect(222)
+    lavalink_glue.clear_intentional_disconnect(222)
     assert 222 not in lavalink_glue._pending_intentional_disconnects
 
 
@@ -1434,7 +1438,7 @@ async def test_websocket_closed_4014_clears_intentional_disconnect_marker() -> N
     bot = _FakeApp()
     handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
 
-    lavalink_glue._mark_intentional_disconnect(111)
+    lavalink_glue.mark_intentional_disconnect(111)
     assert 111 in lavalink_glue._pending_intentional_disconnects
 
     await handler.on_websocket_closed(
@@ -1527,3 +1531,232 @@ async def test_track_exception_broadcast_uses_catalog_template() -> None:
     )
     assert bot.created_messages == [(999, expected)]
     assert bot.created_messages[0][1] == "Track **Plain Title** failed: 403 Forbidden. Skipping."
+
+
+# ---------------------------------------------------------------------------
+# Intentional-disconnect marker leak fix (#203)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _WsClosedEvent203:
+    player: _QueuePlayer
+    code: int = 4014
+    reason: str = "Disconnected"
+    by_remote: bool = True
+
+
+@dataclass
+class _Node203:
+    name: str = "ryzic-default"
+
+
+@dataclass
+class _NodeDisconnectedEvent203:
+    node: _Node203
+    code: int | None = 1006
+    reason: str | None = "lost"
+
+
+class _PlayerManager203:
+    def __init__(self, players: list[_QueuePlayer]) -> None:
+        self._players = players
+
+    def values(self) -> list[_QueuePlayer]:
+        return list(self._players)
+
+
+class _ClientWithPlayers203:
+    def __init__(self, players: list[_QueuePlayer]) -> None:
+        self.player_manager = _PlayerManager203(players)
+
+
+async def test_websocket_closed_non_4014_clears_intentional_disconnect_marker() -> None:
+    """A non-4014 voice close must clear the marker so the next 4014 is genuine.
+
+    Regression for #203 leak mode (a): the pre-fix path returned before the
+    membership check, leaving the marker set forever.
+    """
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    player = _QueuePlayer(queue=[_IdTrack(identifier="/var/cache/ryzic/audio/nn/nnkept.audio")])
+
+    lavalink_glue.mark_intentional_disconnect(111)
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent203(player=player, code=4011)),
+    )
+
+    # Marker cleared, no broadcast, queue untouched (non-4014 doesn't tear down)
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+    assert bot.created_messages == []
+    assert player.queue == [_IdTrack(identifier="/var/cache/ryzic/audio/nn/nnkept.audio")]
+
+
+async def test_websocket_closed_non_4014_without_marker_is_noop() -> None:
+    """No marker + non-4014 close → no broadcast, no exception."""
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent203(player=_QueuePlayer(), code=4011)),
+    )
+
+    assert bot.created_messages == []
+    assert lavalink_glue._pending_intentional_disconnects == {}
+
+
+async def test_node_disconnected_clears_intentional_disconnect_markers() -> None:
+    """Node drop tears down every player AND clears each marker (#203 mode b)."""
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    lavalink_glue.last_play_channel[222] = 888
+    players = [_QueuePlayer(guild_id=111, queue=[]), _QueuePlayer(guild_id=222, queue=[])]
+    client = _ClientWithPlayers203(players)
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, client))
+
+    lavalink_glue.mark_intentional_disconnect(111)
+    lavalink_glue.mark_intentional_disconnect(222)
+
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    await handler.on_node_disconnected(
+        cast(lavalink.NodeDisconnectedEvent, _NodeDisconnectedEvent203(node=_Node203())),
+    )
+
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+    assert 222 not in lavalink_glue._pending_intentional_disconnects
+    # node_reconnecting broadcast per guild, no voice_lost
+    expected = _broadcast_t("lavalink.broadcast.node_reconnecting")
+    assert bot.created_messages == [(999, expected), (888, expected)]
+
+
+async def test_node_disconnected_with_marker_does_not_suppress_node_reconnecting() -> None:
+    """The marker only suppresses voice_lost; node_reconnecting still broadcasts."""
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    client = _ClientWithPlayers203([_QueuePlayer(guild_id=111, queue=[])])
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, client))
+
+    lavalink_glue.mark_intentional_disconnect(111)
+
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    await handler.on_node_disconnected(
+        cast(lavalink.NodeDisconnectedEvent, _NodeDisconnectedEvent203(node=_Node203())),
+    )
+
+    expected = _broadcast_t("lavalink.broadcast.node_reconnecting")
+    assert bot.created_messages == [(999, expected)]
+
+
+async def test_intentional_disconnect_marker_expires_after_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An expired marker must NOT suppress voice_lost (lost-close bounded by TTL).
+
+    Regression for #203 leak mode (c): the 4014 never arrives, so only the
+    TTL + lazy GC clears the marker. After TTL the next 4014 is genuine.
+    """
+    clock = _FakeClock(0.0)
+    monkeypatch.setattr(lavalink_glue.time, "monotonic", clock.monotonic)
+
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+
+    lavalink_glue.mark_intentional_disconnect(111)  # stamped at t=0
+    clock.t = lavalink_glue.INTENTIONAL_DISCONNECT_TTL_SECONDS + 1.0
+
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent203(player=_QueuePlayer())),
+    )
+
+    # Marker expired → voice_lost IS broadcast; marker cleared
+    assert bot.created_messages == [(999, _broadcast_t("lavalink.broadcast.voice_lost"))]
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+
+
+async def test_intentional_disconnect_marker_within_ttl_still_suppresses_voice_lost() -> None:
+    """Within TTL the marker still suppresses voice_lost (#197 preserved with TTL)."""
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    player = _QueuePlayer(queue=[_IdTrack(identifier="/var/cache/ryzic/audio/tt/ttlkeep.audio")])
+
+    lavalink_glue.mark_intentional_disconnect(111)
+
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent203(player=player)),
+    )
+
+    assert bot.created_messages == []
+    assert player.queue == []
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+
+
+async def test_non_4014_then_4014_classifies_as_unintentional() -> None:
+    """Two-event sequence: non-4014 clears marker, next 4014 is genuine.
+
+    Proves the marker stays cleared across events (the leak the fix closes).
+    """
+    bot = _FakeApp()
+    lavalink_glue.last_play_channel[111] = 999
+    handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+    player = _QueuePlayer(queue=[])
+
+    lavalink_glue.mark_intentional_disconnect(111)
+
+    # First: non-4014 close clears the marker, no broadcast.
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent203(player=player, code=4011)),
+    )
+    assert bot.created_messages == []
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+
+    # Second: 4014 close → marker absent → genuine disconnect → voice_lost.
+    await handler.on_websocket_closed(
+        cast(lavalink.WebSocketClosedEvent, _WsClosedEvent203(player=player, code=4014)),
+    )
+    assert bot.created_messages == [(999, _broadcast_t("lavalink.broadcast.voice_lost"))]
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+
+
+async def test_teardown_player_session_runs_full_cleanup_sequence() -> None:
+    """The extracted helper runs the full cleanup sequence.
+
+    Covers: queued tracks released, queue empty, auto-leave cancelled,
+    ``_voice_ready_events`` entry gone, now-playing controller torn down.
+    """
+    from ryzic import audio_cache, now_playing
+
+    fake = RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        guild_id = 111
+        player = _QueuePlayer(queue=[_IdTrack(identifier="/var/cache/ryzic/audio/td/tdown1.audio")])
+        lavalink_glue._start_auto_leave(cast(hikari.GatewayBot, bot), guild_id)
+        lavalink_glue._voice_ready_events[guild_id] = asyncio.Event()
+        now_playing._controllers[guild_id] = (999, 1)
+
+        await lavalink_glue._teardown_player_session(
+            cast(hikari.GatewayBot, bot), guild_id, cast(lavalink.DefaultPlayer, player)
+        )
+
+        assert fake.released == ["tdown1"]
+        assert player.queue == []
+        assert guild_id not in lavalink_glue.auto_leave_tasks
+        assert guild_id not in lavalink_glue._voice_ready_events
+        assert guild_id not in now_playing._controllers
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+class _FakeClock:
+    """Minimal controllable clock for TTL tests."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.t = start
+
+    def monotonic(self) -> float:
+        return self.t

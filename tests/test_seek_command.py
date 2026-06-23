@@ -177,25 +177,43 @@ async def test_bare_seconds_treated_as_absolute() -> None:
     assert player.seek_calls == [45_000]
 
 
-async def test_seek_while_paused_works() -> None:
-    """Regression test for #143: /seek should work on paused tracks."""
+async def test_seek_disconnected_but_current_responds_reconnecting() -> None:
+    """#215 behavior change: reject with reconnecting copy when Lavalink reports
+    disconnected but still holds a stale ``current`` track.
+
+    History: #196 widened the guard from ``player is None or not
+    player.is_playing or player.current is None`` to ``player is None or
+    player.current is None`` so the disconnected-but-current case
+    PROCEEDED (with a success response) rather than saying "Nothing is
+    playing." #210 then pinned that proceed-behavior with this test.
+
+    #215 reverses it: lavalink 5.11.0's ``set_pause``/``seek``/``stop``/
+    ``skip`` do NOT consult ``is_connected`` (they always PATCH via
+    ``node.update_player`` — see ``tests/test_lavalink_disconnected_player.py``),
+    so proceeding's success is server-determined and unverified, and the
+    command paths have no try/except. Reject-up-front with accurate
+    "Reconnecting to voice" copy is safer + more honest than a misleading
+    "Jumped to 2:00." or a false "Nothing is playing." This test now
+    asserts REJECT instead of PROCEED.
+    """
     bot = both_in_voice()
     ctx = context_for(bot)
     ll = FakeLavalinkClient()
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
-    player.is_connected = True
-    player.current = FakeAudioTrack(duration=213_000)
-    player.position = 60_000  # Currently at 1 minute
-    player.paused = True  # Paused!
+    player.is_connected = False  # Lavalink reports disconnected…
+    player.current = FakeAudioTrack(duration=213_000)  # …but holds a stale track
+    player.paused = False
+    player.position = 60_000
 
     await seek_module._handle_seek(ctx, "2:00")
 
-    # Should seek to 2 minutes, NOT return "Nothing is playing"
-    assert player.seek_calls == [120_000]
+    # #215: seek does NOT proceed; reconnecting ephemeral is sent.
+    assert player.seek_calls == []
     fake = cast(Any, ctx)
-    assert fake.responses[0][0] == t("seek.success.jumped", locale="en_US", position="2:00")
-    assert "ephemeral" not in fake.responses[0][1]
+    assert fake.responses[0][0] == t("voice.error.reconnecting", locale="en_US")
+    assert fake.responses[0][0] == "Reconnecting to voice — try again in a moment."
+    assert fake.responses[0][1].get("ephemeral") is True
 
 
 def test_seek_loader_registered() -> None:

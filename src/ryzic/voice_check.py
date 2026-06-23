@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import cast
 
 import hikari
+import lavalink
 import lightbulb
 
 from .i18n import locale_for_ephemeral, t
@@ -76,3 +77,30 @@ async def ensure_same_voice(ctx: lightbulb.Context) -> int | None:
         return None
 
     return int(bot_state.channel_id)
+
+
+async def check_player_or_respond(
+    ctx: lightbulb.Context,
+    player: lavalink.DefaultPlayer | None,
+) -> lavalink.DefaultPlayer | None:
+    """Three-way guard for ``/pause``, ``/resume``, ``/seek``, ``/skip``.
+
+    Returns the player (caller proceeds) only when it is connected AND
+    holds a current track. Responds ephemerally and returns ``None``
+    (caller aborts) when there is no current track ("Nothing is
+    playing.") or when a track is held but the player reports
+    disconnected ("Reconnecting to voice …") — the transient resync
+    window (region migration, voice-WS blip) where commanding the player
+    would PATCH a server that considers it gone. Mirrors
+    :func:`ensure_same_voice`'s respond-and-return convention. Replaces
+    the duplicated ``if player is None or player.current is None`` block
+    across the four command files.
+    """
+    locale = locale_for_ephemeral(ctx)
+    if player is None or player.current is None:
+        await ctx.respond(t("np.error.nothing_playing", locale=locale), ephemeral=True)
+        return None
+    if not player.is_connected:
+        await ctx.respond(t("voice.error.reconnecting", locale=locale), ephemeral=True)
+        return None
+    return player
