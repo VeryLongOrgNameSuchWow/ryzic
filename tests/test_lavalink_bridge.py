@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import hikari
 import lavalink
@@ -1323,6 +1323,7 @@ async def test_auto_leave_broadcast_uses_catalog_template(
 
     class _ConnectedPlayer:
         is_connected = True
+        queue: ClassVar[list[Any]] = []
 
     class _ConnectedPlayerManager:
         def get(self, guild_id: int) -> _ConnectedPlayer:
@@ -1748,6 +1749,118 @@ async def test_teardown_player_session_runs_full_cleanup_sequence() -> None:
         assert guild_id not in lavalink_glue.auto_leave_tasks
         assert guild_id not in lavalink_glue._voice_ready_events
         assert guild_id not in now_playing._controllers
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_teardown_player_session_is_idempotent() -> None:
+    """Double-teardown is safe: every step is a no-op on empty state."""
+    from ryzic import audio_cache, now_playing
+
+    fake = RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        guild_id = 111
+        player = _QueuePlayer(queue=[_IdTrack(identifier="/var/cache/ryzic/audio/id/idem1.audio")])
+
+        await lavalink_glue._teardown_player_session(
+            cast(hikari.GatewayBot, bot), guild_id, cast(lavalink.DefaultPlayer, player)
+        )
+        assert fake.released == ["idem1"]
+
+        # Second call: queue empty, no task, no event, no controller.
+        await lavalink_glue._teardown_player_session(
+            cast(hikari.GatewayBot, bot), guild_id, cast(lavalink.DefaultPlayer, player)
+        )
+        assert fake.released == ["idem1"]
+        assert player.queue == []
+        assert guild_id not in lavalink_glue.auto_leave_tasks
+        assert guild_id not in lavalink_glue._voice_ready_events
+        assert guild_id not in now_playing._controllers
+    finally:
+        audio_cache.set_audio_cache(None)
+
+
+async def test_auto_leave_calls_teardown_player_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #224: ``_auto_leave`` must call ``_teardown_player_session``."""
+    bot = _FakeApp()
+    guild_id = 111
+
+    class _ConnectedPlayer:
+        is_connected = True
+        queue: ClassVar[list[Any]] = []
+
+    class _ConnectedPlayerManager:
+        def get(self, gid: int) -> _ConnectedPlayer:
+            return _ConnectedPlayer()
+
+    class _ConnectedClient:
+        player_manager = _ConnectedPlayerManager()
+
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, _ConnectedClient()))
+
+    teardown_calls: list[int] = []
+
+    async def _spy_sleep(_: float) -> None:
+        return
+
+    real_teardown = lavalink_glue._teardown_player_session
+
+    async def _spy_teardown(b: Any, gid: int, p: Any) -> None:
+        teardown_calls.append(gid)
+        await real_teardown(b, gid, p)
+
+    monkeypatch.setattr(asyncio, "sleep", _spy_sleep)
+    monkeypatch.setattr(lavalink_glue, "_teardown_player_session", _spy_teardown)
+
+    await lavalink_glue._auto_leave(cast(hikari.GatewayBot, bot), guild_id, 45)
+
+    assert teardown_calls == [guild_id]
+
+
+async def test_4014_after_auto_leave_is_noop_teardown() -> None:
+    """A 4014 arriving after ``_auto_leave`` ran hits empty state (no double-release).
+
+    Regression for #224: ``_auto_leave`` now tears down eagerly, so the
+    late 4014 close event must not double-release or re-broadcast.
+    """
+    from ryzic import audio_cache
+
+    @dataclass
+    class _WsClosedEvent:
+        player: _QueuePlayer
+        code: int = 4014
+        reason: str = "Disconnected"
+        by_remote: bool = True
+
+    fake = RecordingCache()
+    audio_cache.set_audio_cache(cast(audio_cache.AudioCache, fake))
+    try:
+        bot = _FakeApp()
+        lavalink_glue.last_play_channel[111] = 999
+        handler = lavalink_glue.EventHandler(cast(hikari.GatewayBot, bot))
+        player = _QueuePlayer(
+            queue=[_IdTrack(identifier="/var/cache/ryzic/audio/al/autolv1.audio")]
+        )
+
+        # Simulate auto-leave having already torn down + marked intentional.
+        lavalink_glue.mark_intentional_disconnect(111)
+        await lavalink_glue._teardown_player_session(
+            cast(hikari.GatewayBot, bot), 111, cast(lavalink.DefaultPlayer, player)
+        )
+        assert fake.released == ["autolv1"]
+
+        # Now the 4014 close arrives; the intentional marker suppresses
+        # voice_lost and the teardown hits empty state.
+        await handler.on_websocket_closed(
+            cast(lavalink.WebSocketClosedEvent, _WsClosedEvent(player=player)),
+        )
+
+        assert fake.released == ["autolv1"]
+        assert bot.created_messages == []
     finally:
         audio_cache.set_audio_cache(None)
 
