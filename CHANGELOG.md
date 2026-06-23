@@ -27,12 +27,11 @@
 ### Bug Fixes
 
 * **commands:** align /nowplaying ephemeral default with /queue ([#207](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/207)) ([618ca0d](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/618ca0dabcb93728ae14c597091951746d1aedf6))
-* **commands:** allow pause/resume/seek/skip on paused tracks ([#196](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/196)) ([3a0e62e](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/3a0e62e0d1e62e1dc6c9e226fb9e7e4684bb1c70)), closes [#143](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/143)
+* **commands:** nothing-playing guard checks `current` directly ([#196](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/196)) ([3a0e62e](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/3a0e62e0d1e62e1dc6c9e226fb9e7e4684bb1c70))
 * **commands:** reconnecting copy when Lavalink player disconnected ([#215](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/215)) ([2af04a4](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/2af04a4051327da17b320f5ebc7a334918ff10cd))
 * **lavalink_glue:** bound and clear intentional-disconnect marker ([#203](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/203)) ([59b0022](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/59b002241b60c11c583a10b5ba78d05e6c64903a))
 * **lavalink_glue:** clean up intentional-disconnect marker on error paths ([#198](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/198)) ([fc151ad](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/fc151ad30d75e41a43032d0a7422dafa8fb15b2b))
 * **lavalink_glue:** skip voice_lost broadcast on intentional disconnects ([#197](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/197)) ([cf24312](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/cf24312534e52551e4de9ecd6a3c5778470f0350)), closes [#170](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/170)
-* **now_playing:** bump controller to channel bottom after broadcasts ([#199](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/199)) ([8d516ac](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/8d516ac1baf638ffb9514eaf8d220ea33bcd499a)), closes [#171](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/171)
 * periodially refresh now-playing controllers so progress advances ([#172](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/172)) ([#200](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/200)) ([1687730](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/16877308bf813a7cd9d127055236696f9ec738ae))
 
 
