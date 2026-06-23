@@ -1,6 +1,6 @@
 """Hikari interaction handler for the now-playing controller buttons.
 
-Routes ⏯ Pause/Resume · ⏭ Skip · ⏹ Leave button clicks to the same
+Routes ⏯ Pause/Resume · ⏭ Skip · ⏹ Stop & leave button clicks to the same
 ``_handle_*`` bodies the slash commands use, via a slim
 :class:`InteractionContextLike` adapter that exposes the surface those
 handlers read off ``lightbulb.Context`` (``guild_id``, ``user``,

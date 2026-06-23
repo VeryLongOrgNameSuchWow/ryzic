@@ -25,8 +25,10 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 - [ ] `/queue page:2` on a queue with 11+ tracks shows entries 11..20 with global indices (line starts at "11."). Title gains a "page 2/N" suffix; small queues that fit on one page render no page suffix.
 - [ ] `/queue page:99` on a small queue returns an ephemeral "Queue has only N page(s)." with correct pluralization (1 → "page"; 2+ → "pages").
 - [ ] `/queue private:True` shows the same embed but only to the invoker (ephemeral); other users in the channel don't see it.
+- [ ] Bare `/queue` (no `private:` arg) is also ephemeral by default — only the invoker sees it. Pass `private:False` explicitly to broadcast the queue to the channel.
 - [ ] `/queue page:2 private:True` composes — page 2 rendered ephemerally to invoker only.
-- [ ] `/np private:True` shows the now-playing embed but only to the invoker (ephemeral).
+- [ ] `/nowplaying` (no `private:` arg) shows the now-playing embed ephemerally to the invoker only (the default after #207). `/np` still works as an alias.
+- [ ] `/nowplaying private:False` broadcasts the now-playing embed to the channel (visible to everyone); `/nowplaying private:True` forces invoker-only.
 - [ ] `/skip` advances to the next track immediately; the embed names the skipped title.
 - [ ] `/pause` halts playback; `/resume` resumes from the same position (no audible jump).
 - [ ] `/leave` disconnects the bot and clears the queue; `/queue` afterwards reports empty.
@@ -43,9 +45,9 @@ Reset state between runs with `docker compose down -v && docker compose up -d` i
 
 ## Now-playing controller
 
-- [ ] First `/play` posts a "Now playing" embed in that text channel with three buttons: ⏸ Pause · ⏭ Skip · ⏹ Stop.
+- [ ] First `/play` posts a "Now playing" embed in that text channel with three buttons: ⏸ Pause · ⏭ Skip · ⏹ Stop & leave. (The button's stop-square emoji is a known cosmetic mismatch with the "Stop & leave" label — not a regression.)
 - [ ] Pressing ⏸ Pause swaps the embed title to "Paused" and replaces the button with ▶ Resume; press it again to flip back.
-- [ ] Pressing ⏭ Skip advances to the next track and the embed updates to the new track title; clicking ⏹ Stop disconnects + clears the queue, and the embed switches to "Idle" with all three buttons disabled.
+- [ ] Pressing ⏭ Skip advances to the next track and the embed updates to the new track title; clicking ⏹ Stop & leave disconnects + clears the queue, and the embed switches to "Idle" with all three buttons disabled.
 - [ ] Voice gating: a user NOT in the bot's voice channel clicking any button gets an ephemeral "Join <channel>" message; the player state is unchanged.
 - [ ] Stale-embed click after `docker compose restart ryzic` returns an ephemeral "previous session" message; the embed left in the channel does NOT mutate state.
 - [ ] A second `/play` in a different text channel posts a fresh controller in the new channel; the prior embed in the old channel is left as a history marker (not deleted) and stops receiving updates.

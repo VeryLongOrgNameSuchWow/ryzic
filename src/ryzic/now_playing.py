@@ -2,7 +2,7 @@
 
 A long-lived embed in the channel where ``/play`` was last invoked,
 showing the currently-playing track plus three media-remote buttons
-(pause/resume, skip, leave). Updates on every play/pause/resume/skip/end
+(pause/resume, skip, Stop & leave). Updates on every play/pause/resume/skip/end
 so the channel always carries an accurate current-state surface.
 
 Channel choice follows :data:`lavalink_glue.last_play_channel`: the
@@ -49,6 +49,17 @@ BUTTON_SKIP = "ryzic:np:skip"
 # custom_id wire-compat preserved per #147 and #174; user-visible label
 # is "Stop & leave" (see ``_LABEL_LEAVE`` below). Existing controller
 # embeds posted before the label rename remain dispatchable.
+#
+# The ``custom_id`` VALUE (``ryzic:np:stop``) is intentionally FROZEN for
+# wire-compat: existing button clicks on controller messages posted
+# before the Stop -> Leave -> "Stop & leave" label renames must keep
+# routing here, so the wire identifier must never change even as the
+# user-visible label evolves. The Python constant NAME (``BUTTON_STOP``)
+# and the label variable (``_LABEL_LEAVE``) are now historical misnomers
+# — they refer to the old button labels — but renaming them is a
+# cosmetic-only change that is intentionally NOT done here; the
+# ``custom_id`` is the one thing that must not change. This documents
+# the drift rather than churning the names (issue #206).
 BUTTON_STOP = "ryzic:np:stop"
 
 # All of our custom_ids share this prefix; the interaction listener

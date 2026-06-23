@@ -352,7 +352,7 @@ def format_now_playing_line(
 
     Shape: ``[**title**](url) — M:SS / M:SS`` with ``(paused)`` appended
     when applicable. Title is markdown-escaped and length-capped so the
-    line is safe to drop into any embed surface (`/np` description,
+    line is safe to drop into any embed surface (`/nowplaying` description,
     ``/queue`` top hint, future controller embed).
     """
     title = safe_truncate(escape_markdown(track.title), EMBED_FIELD_VALUE_MAX // 2)
@@ -376,12 +376,12 @@ def build_simple_now_playing_embed(
     paused: bool,
     locale: str,
 ) -> hikari.Embed:
-    """Build the ``/np`` embed for the currently-playing track.
+    """Build the ``/nowplaying`` embed for the currently-playing track.
 
     Coexists with :func:`build_now_playing_embed` (the persistent
     controller surface added in #90/#118): each command renders its own
     embed today. Unifying both around :func:`format_now_playing_line`
-    so the controller and ``/np`` stay visually aligned is tracked as
+    so the controller and ``/nowplaying`` stay visually aligned is tracked as
     a follow-up; for now they diverge by design.
     """
     raw_line = format_now_playing_line(track, position_ms, paused=paused, locale=locale)
@@ -410,7 +410,7 @@ def build_queue_embed(
     short queues that fit on a single page render unchanged. The
     currently-playing track is surfaced as a single ``Now: …`` hint at
     the top of the description — full now-playing detail belongs in
-    ``/np``.
+    ``/nowplaying``.
     """
     queue_count = len(queue)
     queue_total_ms = sum(info.duration_ms for info, _ in queue)
