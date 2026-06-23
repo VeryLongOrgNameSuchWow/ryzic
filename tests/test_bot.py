@@ -199,21 +199,50 @@ def test_install_cookies_creates_cache_dir_if_missing(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_update_controllers_loop_refreshes_active_controllers() -> None:
-    """The loop calls refresh_all once per cycle and exits on cancellation."""
+    """The loop calls refresh_all once per cycle and exits on cancellation.
+
+    The loop's first action is ``await asyncio.sleep(15)``, so the sleep
+    must be short-circuited to keep the test fast. We replace
+    ``asyncio.sleep`` with a no-wait stand-in that yields once (so a
+    pending task cancellation is delivered at that await rather than
+    spinning the loop synchronously). Cancellation is driven by the
+    ``refresh_all`` stub itself via ``asyncio.current_task().cancel()``
+    after the first call, rather than a ``side_effect`` list of exact
+    length — this decouples the test from the loop's internal sleep call
+    count (a future jitter or second sleep would not break it).
+
+    The loop calls ``asyncio.sleep`` via the ``asyncio`` module namespace
+    (``import asyncio`` + ``asyncio.sleep``), so patching
+    ``ryzic.bot.asyncio.sleep`` would be identical to patching
+    ``asyncio.sleep`` — there's no narrower module-local reference to
+    target without a src/ change, which is out of scope for #205. The
+    ``with``-scoped ``patch`` keeps the override local to this test;
+    pytest-asyncio runs tests sequentially so no sibling coroutine sees
+    the fake.
+    """
     bot_mock = MagicMock(spec=hikari.GatewayBot)
-
-    # refresh_all is patched out, so each cycle is exactly one sleep + one
-    # refresh_all. The second sleep raises CancelledError to break the loop
-    # after one completed iteration.
     call_count = 0
+    real_sleep = asyncio.sleep
 
-    async def counting_refresh_all(bot):
+    async def _no_wait_sleep(_delay: float, *_a: object, **_kw: object) -> None:
+        # Yield once so a pending cancellation lands here instead of the
+        # loop spinning synchronously through the (un-suspending) fake.
+        await real_sleep(0)
+
+    async def counting_refresh_all(_bot: object) -> None:
         nonlocal call_count
         call_count += 1
+        # Cancel the running loop task after the first refresh so the next
+        # await raises CancelledError and the loop breaks. Done here rather
+        # than via a side_effect list so the test doesn't depend on the
+        # exact number of sleep calls per cycle.
+        task = asyncio.current_task()
+        assert task is not None  # we are running inside the loop task
+        task.cancel()
 
     with (
         patch("ryzic.now_playing.refresh_all", side_effect=counting_refresh_all),
-        patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]),
+        patch("asyncio.sleep", new=_no_wait_sleep),
     ):
         await bot._update_controllers_loop(bot_mock)
 
