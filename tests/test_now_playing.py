@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import hikari
 import lavalink
@@ -222,6 +222,113 @@ async def test_refresh_recovers_from_deleted_message_by_reposting() -> None:
 
     assert len(rest.create_calls) == 1
     assert now_playing.is_known_message(111, 9301)
+
+
+# ---------------------------------------------------------------------------
+# refresh_all — per-guild skip filter + exception isolation (#200)
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_all_skips_paused_and_idle_players() -> None:
+    """``refresh_all`` only edits controllers whose progress is moving.
+
+    A PLAYING player triggers an edit; a PAUSED player and an IDLE player
+    (``current is None``) are skipped so the loop doesn't issue
+    byte-identical edits every cycle (edit spam / REST quota burns). A
+    regression dropping the paused-skip guard must fail here.
+    """
+    rest = _FakeRest(create_returns=10_000)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+
+    # Three guilds, each with an existing controller (so refresh() has a
+    # record to edit). Seed distinct player states.
+    for guild_id, paused, has_current in [
+        (111, False, True),  # PLAYING -> should be edited
+        (222, True, True),  # PAUSED -> skipped
+        (333, False, False),  # IDLE (current is None) -> skipped
+    ]:
+        player = ll.player_manager.create(guild_id=guild_id)
+        player.is_connected = True
+        player.paused = paused
+        player.current = make_track_with_info() if has_current else None
+        lavalink_glue.last_play_channel[guild_id] = guild_id * 10
+        await now_playing.upsert_for_track_start(bot, guild_id)
+    rest.edit_calls.clear()
+
+    await now_playing.refresh_all(bot)
+
+    edited_guilds = {call["channel_id"] for call in rest.edit_calls}
+    assert edited_guilds == {111 * 10}
+
+
+async def test_refresh_all_skips_guilds_with_no_player() -> None:
+    """A guild whose player disappeared (None) is skipped, not edited."""
+    rest = _FakeRest(create_returns=11_000)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+
+    # Guild 111: PLAYING -> edited. Guild 222: controller record exists
+    # but lavalink_glue.get_player returns None -> skipped.
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info()
+    lavalink_glue.last_play_channel[111] = 1110
+    await now_playing.upsert_for_track_start(bot, 111)
+
+    # Plant a controller record for 222 without creating a player.
+    now_playing._controllers[222] = (2220, 9999)
+    rest.edit_calls.clear()
+
+    await now_playing.refresh_all(bot)
+
+    edited_channels = {call["channel_id"] for call in rest.edit_calls}
+    assert edited_channels == {1110}
+
+
+async def test_refresh_all_isolates_per_guild_exceptions() -> None:
+    """One guild's raising refresh does NOT abort the loop for other guilds.
+
+    The loop catches per-guild exceptions so a single REST failure (or an
+    unexpected bug for one guild) doesn't starve the rest of the
+    controllers' progress-bar advances.
+    """
+    # Two PLAYING guilds. Guild 111's edit raises a HikariError (logged +
+    # swallowed inside _post_or_edit); guild 222's edit must still run.
+    # Use NotFoundError on 111 to force the create fallback path, then
+    # make the create also fail so the refresh for 111 raises within
+    # _post_or_edit's HikariError handling — actually _post_or_edit logs
+    # and returns on HikariError, so the per-guild try/except in
+    # refresh_all is exercised by patching refresh to raise for 111 only.
+    rest = _FakeRest(create_returns=12_000)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+
+    for guild_id in (111, 222):
+        player = ll.player_manager.create(guild_id=guild_id)
+        player.is_connected = True
+        player.current = make_track_with_info()
+        lavalink_glue.last_play_channel[guild_id] = guild_id * 10
+        await now_playing.upsert_for_track_start(bot, guild_id)
+    rest.edit_calls.clear()
+
+    real_refresh = now_playing.refresh
+
+    async def flaky_refresh(b, gid):
+        if gid == 111:
+            raise RuntimeError("simulated per-guild failure")
+        await real_refresh(b, gid)
+
+    with patch.object(now_playing, "refresh", side_effect=flaky_refresh):
+        await now_playing.refresh_all(bot)
+
+    # Guild 222 still got its edit despite guild 111 raising.
+    edited_channels = {call["channel_id"] for call in rest.edit_calls}
+    assert 222 * 10 in edited_channels
+    assert 111 * 10 not in edited_channels
 
 
 # ---------------------------------------------------------------------------

@@ -144,6 +144,22 @@ async def test_default_response_is_ephemeral() -> None:
     assert fake.responses[0][1].get("ephemeral") is True
 
 
+def test_queue_option_private_defaults_to_true() -> None:
+    """The lightbulb ``private`` option itself defaults to ``True`` (#159).
+
+    ``_handle_queue``'s ``private: bool = True`` signature default is a
+    separate layer from the slash-command option's ``default=True`` — at
+    runtime lightbulb passes the OPTION default into ``invoke``, not the
+    function signature default. A regression flipping the option's
+    ``default=`` back to ``False`` would pass ``test_default_response_is_
+    ephemeral`` (which calls ``_handle_queue`` directly) while reverting
+    production. Mirror the replay loader test's ``_command_data.options``
+    pattern to assert the option-level default directly.
+    """
+    private_option = queue_module.Queue._command_data.options["private"]
+    assert private_option.default is True
+
+
 async def test_private_false_makes_response_public() -> None:
     """``private=False`` opts back to a public response (issue #100)."""
     bot = FakeBot()
