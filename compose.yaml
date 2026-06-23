@@ -6,7 +6,7 @@ services:
     # operators run `docker compose pull && docker compose up -d` after each
     # release. Pre-1.0 minor bumps may include breaking changes — read the
     # release notes (see SEMVER.md).
-    image: ghcr.io/verylongorgnamesuchwow/ryzic:0.5
+    image: ghcr.io/verylongorgnamesuchwow/ryzic:0.6
     depends_on:
       lavalink:
         condition: service_healthy
