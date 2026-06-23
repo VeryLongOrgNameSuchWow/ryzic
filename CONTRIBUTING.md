@@ -87,7 +87,7 @@ _broadcast_t(
 
 Discord mention markup (`<#123>`, `<@456>`, `<t:123:R>`) is rendered client-side and does NOT need escaping — those tokens pass through i18nice and Discord as opaque literals.
 
-**Plurals use Rails variants.** Plural-shaped keys use a dict body keyed by `zero` / `one` / `two` / `few` / `many`. `many` is the required catch-all (i18nice's analogue of CLDR's `other`). Do not use `other` — i18nice silently returns the bare key for that variant. The catalog-drift lint rejects it.
+**Plurals use Rails variants.** Plural-shaped keys use a dict body keyed by `zero` / `one` / `few` / `many`. `many` is the required catch-all (i18nice's analogue of CLDR's `other`). Do not use `other` — i18nice silently returns the bare key for that variant. The catalog-drift lint rejects it. i18nice's `pluralize` has no `two` codepath (`count == 2` falls through to `few`); a `two` branch would be unreachable, so the lint rejects it.
 
 ```json
 "queue.error.too_few_pages": {
@@ -106,12 +106,18 @@ from ryzic.i18n import _broadcast_t
 message = _broadcast_t("lavalink.broadcast.voice_lost")
 ```
 
-**The catalog-drift lint.** `tests/test_i18n_catalog.py` is part of the default `pytest` lane and gates four invariants:
+**The catalog-drift lint.** `tests/test_i18n_catalog.py` is part of the default `pytest` lane and gates six invariants:
 
 - Every `t("literal")` / `_broadcast_t("literal")` call resolves to a real catalog key.
-- Every catalog key is referenced somewhere in `src/` or `tests/` (any string-literal match — covers dynamic indirections like `FetchFailed` raise sites).
-- Every plural-shaped key uses only Rails variants and contains `many`.
-- Every `%{name}` placeholder in a catalog template arrives as a `name=...` kwarg at the call site.
+- Every catalog key is referenced somewhere in `src/` or `tests/` by an actual string-literal usage. Docstrings and `#` comments do NOT count as references — only real call-site first args and named-indirect dict values (e.g. `_FRIENDLY_ERROR_KEYS`) do. A key kept alive only by a docstring is flagged as an orphan.
+- Every plural-shaped key uses only Rails variants (`zero` / `one` / `few` / `many`) and contains `many`.
+- Every `%{name}` placeholder in a catalog template arrives as a `name=...` kwarg at the `t()` / `_broadcast_t()` call site.
+- Every `FetchFailed(key, ...)` construction resolves to a real catalog key. Literal keys are checked directly; the one dynamic site (`ytdlp.py` `raise FetchFailed(key)`) is resolved via the `_FRIENDLY_ERROR_KEYS` dict literal.
+- Every `%{name}` placeholder in a `FetchFailed` template arrives as a `name=...` kwarg at the construction site (parity with the `t()` lint).
+
+The catalog loader in the test also rejects duplicate JSON keys at any depth; the runtime loader (`src/ryzic/i18n/__init__.py`) intentionally logs and falls back instead of raising so a typo doesn't block bot boot.
+
+**What the lint cannot catch statically.** A `FetchFailed` raise site whose key is computed by concatenation or a function call (not a literal, not traceable to a dict literal) can't be statically resolved. The gate fails the build demanding an explicit `_DYNAMIC_FETCHFAILED_ALLOWLIST` entry in `tests/test_i18n_catalog.py` plus a rationale comment, so the hole is documented rather than silent.
 
 When the lint fails, the failure message lists the offending `file:line` and the offending key. The fix is mechanical: either add the catalog entry, remove the orphan, fix the plural variant name, or pass the missing kwarg. Run it locally with `uv run pytest tests/test_i18n_catalog.py`.
 
