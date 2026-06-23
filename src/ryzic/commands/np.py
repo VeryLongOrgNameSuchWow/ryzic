@@ -1,10 +1,14 @@
 """``/nowplaying`` slash command: show the currently-playing track.
 
-Mirrors ``/queue``'s ``private`` flag (issue #100): ``private=True`` routes
-the success embed to an ephemeral response so the invoker can check the
-current track without spamming a busy channel. Empty/error paths stay
-ephemeral regardless — failure messages don't pollute the channel
-either way.
+``/nowplaying`` (and its ``/np`` alias) are ephemeral-by-default: the
+``private`` option defaults to ``True``, routing the success embed to an
+ephemeral response so the invoker can check the current track without
+spamming a busy channel. Empty/error paths stay ephemeral regardless —
+failure messages don't pollute the channel either way.
+
+Issue #148/#159 aligned ``/queue`` this way (status-introspection
+commands answer the invoker, not the channel); issue #207 extended the
+alignment to ``/nowplaying``. The original mirror-intent was #100.
 
 Issue #150: primary command is ``/nowplaying``; ``/np`` is preserved as a
 shorthand. Lightbulb v3 has no first-class alias parameter on
@@ -33,7 +37,7 @@ class NowPlaying(
     private = lightbulb.boolean(
         "private",
         t("common.param.private.description", locale="en_US"),
-        default=False,
+        default=True,
     )
 
     @lightbulb.invoke
@@ -51,7 +55,7 @@ class Np(
     private = lightbulb.boolean(
         "private",
         t("common.param.private.description", locale="en_US"),
-        default=False,
+        default=True,
     )
 
     @lightbulb.invoke
@@ -59,7 +63,7 @@ class Np(
         await _handle_np(ctx, private=self.private)
 
 
-async def _handle_np(ctx: lightbulb.Context, *, private: bool = False) -> None:
+async def _handle_np(ctx: lightbulb.Context, *, private: bool = True) -> None:
     guild_id = ctx.guild_id
     if guild_id is None:
         await ctx.respond(
