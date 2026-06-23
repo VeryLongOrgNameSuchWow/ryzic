@@ -237,19 +237,12 @@ async def _send_to_last_play_channel(bot: hikari.GatewayBot, guild_id: int, cont
             channel_id,
             guild_id,
         )
-        return
     except hikari.HikariError:
         _log.warning(
             "could not post to last_play_channel %d for guild %d",
             channel_id,
             guild_id,
         )
-        return
-
-    # Bump controller to channel bottom after broadcast (rate-limited)
-    from . import now_playing
-
-    await now_playing.bump_if_needed(bot, guild_id)
 
 
 def _track_title(track: lavalink.AudioTrack | None) -> str:
