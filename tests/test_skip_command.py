@@ -218,6 +218,32 @@ async def test_skip_while_paused_with_empty_queue_does_not_re_pause() -> None:
     assert player.set_pause_calls == []
 
 
+async def test_skip_disconnected_but_current_responds_reconnecting() -> None:
+    """#215: reject with reconnecting copy when Lavalink reports disconnected
+    but still holds a stale ``current`` — do NOT proceed to ``skip`` (or the
+    defensive ``set_pause``). The helper rejects up-front, so both of skip's
+    unprotected lavalink calls are protected.
+    """
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = False
+    player.current = make_track_with_info(title="Stale")
+    player.queue = [make_track_with_info(title="Next", video_id="aaaaaaaaaaa")]
+    player.paused = True
+
+    await skip_module._handle_skip(ctx)
+
+    assert player.skip_calls == 0
+    assert player.set_pause_calls == []
+    fake = cast(Any, ctx)
+    assert fake.responses[0][0] == t("voice.error.reconnecting", locale="en_US")
+    assert fake.responses[0][0] == "Reconnecting to voice — try again in a moment."
+    assert fake.responses[0][1].get("ephemeral") is True
+
+
 def test_skip_loader_registered() -> None:
     assert skip_module.Skip._command_data.name == "skip"
     assert skip_module.Skip._command_data.description == t(

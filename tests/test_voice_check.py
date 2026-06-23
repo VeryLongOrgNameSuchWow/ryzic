@@ -1,4 +1,4 @@
-"""Tests for ``ryzic.voice_check.ensure_same_voice``.
+"""Tests for ``ryzic.voice_check.ensure_same_voice`` + ``check_player_or_respond``.
 
 We mock the slim subset of ``hikari.GatewayBot`` + ``lightbulb.Context``
 needed by the helper. The real classes carry too many slots to
@@ -153,3 +153,77 @@ async def test_bot_state_with_none_channel_treated_as_disconnected() -> None:
     ctx = _FakeContext(guild_id=111, user_id=1, bot_user_id=10, states=states)
     assert await voice_check.ensure_same_voice(cast(lightbulb.Context, ctx)) is None
     assert ctx.responses[0][0] == t("voice.error.bot_not_in_voice", locale="en_US")
+
+
+# ---------------------------------------------------------------------------
+# check_player_or_respond — three-way guard for pause/resume/seek/skip (#215).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeAudioTrack:
+    """Minimal track stub: only ``current is not None`` matters to the helper."""
+
+
+class _FakePlayer:
+    """Player stub with the ``is_connected`` / ``current`` surface the helper reads.
+
+    Mirrors real ``lavalink.DefaultPlayer``: ``is_connected`` is derived from
+    ``channel_id is not None``.
+    """
+
+    def __init__(self, *, channel_id: int | None, current: _FakeAudioTrack | None) -> None:
+        self.channel_id = channel_id
+        self.current = current
+
+    @property
+    def is_connected(self) -> bool:
+        return self.channel_id is not None
+
+
+async def test_check_player_or_respond_nothing_playing_responds_and_returns_none() -> None:
+    ctx = _FakeContext(guild_id=111, user_id=1, bot_user_id=10, states={})
+    result = await voice_check.check_player_or_respond(cast(lightbulb.Context, ctx), player=None)
+    assert result is None
+    assert ctx.responses[0][0] == t("np.error.nothing_playing", locale="en_US")
+    assert ctx.responses[0][0] == "Nothing is playing."
+    assert ctx.responses[0][1].get("ephemeral") is True
+
+
+async def test_check_player_or_respond_no_current_responds_and_returns_none() -> None:
+    ctx = _FakeContext(guild_id=111, user_id=1, bot_user_id=10, states={})
+    player = _FakePlayer(channel_id=999, current=None)
+    assert (
+        await voice_check.check_player_or_respond(
+            cast(lightbulb.Context, ctx), player=cast(Any, player)
+        )
+        is None
+    )
+    assert ctx.responses[0][0] == t("np.error.nothing_playing", locale="en_US")
+
+
+async def test_check_player_or_respond_reconnecting_responds_and_returns_none() -> None:
+    """#215: a held ``current`` with ``is_connected=False`` is the resync window.
+
+    Reject with ``voice.error.reconnecting`` ephemeral — NOT the misleading
+    "Nothing is playing." (a track IS held) and NOT a silent proceed.
+    """
+    ctx = _FakeContext(guild_id=111, user_id=1, bot_user_id=10, states={})
+    player = _FakePlayer(channel_id=None, current=_FakeAudioTrack())
+    result = await voice_check.check_player_or_respond(
+        cast(lightbulb.Context, ctx), player=cast(Any, player)
+    )
+    assert result is None
+    assert ctx.responses[0][0] == t("voice.error.reconnecting", locale="en_US")
+    assert ctx.responses[0][0] == "Reconnecting to voice — try again in a moment."
+    assert ctx.responses[0][1].get("ephemeral") is True
+
+
+async def test_check_player_or_respond_ready_returns_player() -> None:
+    ctx = _FakeContext(guild_id=111, user_id=1, bot_user_id=10, states={})
+    player = _FakePlayer(channel_id=999, current=_FakeAudioTrack())
+    result = await voice_check.check_player_or_respond(
+        cast(lightbulb.Context, ctx), player=cast(Any, player)
+    )
+    assert result is player
+    assert ctx.responses == []

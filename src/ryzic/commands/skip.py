@@ -20,8 +20,8 @@ import hikari
 import lightbulb
 
 from .. import lavalink_glue, ux
-from ..i18n import locale_for_ephemeral, locale_for_public, t
-from ..voice_check import ensure_same_voice
+from ..i18n import locale_for_public, t
+from ..voice_check import check_player_or_respond, ensure_same_voice
 
 loader = lightbulb.Loader()
 
@@ -48,12 +48,14 @@ async def _handle_skip(ctx: lightbulb.Context) -> None:
     guild_id = cast(int, ctx.guild_id)
 
     player = lavalink_glue.get_player(guild_id)
-    if player is None or player.current is None:
-        await ctx.respond(
-            t("np.error.nothing_playing", locale=locale_for_ephemeral(ctx)),
-            ephemeral=True,
-        )
+    player = await check_player_or_respond(ctx, player)
+    if player is None:
         return
+    # check_player_or_respond returns non-None only when current is set;
+    # restate the invariant for ty since the narrowing lives in the helper.
+    # (The later ``player.current is None`` after ``skip()`` is a real check
+    # — skip may have cleared it — and stays as-is.)
+    assert player.current is not None
 
     skipped_info = ux.get_track_info(player.current)
     skipped_title = skipped_info.title if skipped_info is not None else player.current.title
