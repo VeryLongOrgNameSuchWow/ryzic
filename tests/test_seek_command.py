@@ -177,21 +177,30 @@ async def test_bare_seconds_treated_as_absolute() -> None:
     assert player.seek_calls == [45_000]
 
 
-async def test_seek_while_paused_works() -> None:
-    """Regression test for #143: /seek should work on paused tracks."""
+async def test_seek_proceeds_when_lavalink_disconnected_but_current_set() -> None:
+    """#196's actual behavioral change: commands proceed when Lavalink reports
+    disconnected but still holds a stale ``current`` track.
+
+    Pre-#196 guard was ``player is None or not player.is_playing or
+    player.current is None``; with ``is_connected=False`` and a non-None
+    ``current``, ``is_playing`` is False so the old guard fired
+    "Nothing is playing". Post-#196 guard ``player is None or
+    player.current is None`` lets the command proceed. This test
+    distinguishes the two and would fail on pre-#196 code.
+    """
     bot = both_in_voice()
     ctx = context_for(bot)
     ll = FakeLavalinkClient()
     install_lavalink_client(ll)
     player = ll.player_manager.create(guild_id=111)
-    player.is_connected = True
-    player.current = FakeAudioTrack(duration=213_000)
-    player.position = 60_000  # Currently at 1 minute
-    player.paused = True  # Paused!
+    player.is_connected = False  # Lavalink reports disconnected…
+    player.current = FakeAudioTrack(duration=213_000)  # …but holds a stale track
+    player.paused = False
+    player.position = 60_000
 
     await seek_module._handle_seek(ctx, "2:00")
 
-    # Should seek to 2 minutes, NOT return "Nothing is playing"
+    # Post-#196: seek proceeds; NOT "Nothing is playing".
     assert player.seek_calls == [120_000]
     fake = cast(Any, ctx)
     assert fake.responses[0][0] == t("seek.success.jumped", locale="en_US", position="2:00")

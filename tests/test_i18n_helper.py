@@ -6,8 +6,8 @@ Covers the four hook surfaces the helper is responsible for:
 - Missing-key fires ``_on_missing_translation`` (logs at ERROR, returns key).
 - Missing-var fires ``_on_missing_placeholder`` (logs at ERROR, returns
   literal ``%{name}``).
-- Malformed-catalog fallback: simulate by re-running ``_configure()`` with
-  a monkeypatched raise; ``t()`` still returns something usable (the key).
+- Configuration-failure guard: ``_configure()`` swallows a raising
+  ``i18n.set`` so the bot still boots; ``t()`` returns the raw key.
 """
 
 from __future__ import annotations
@@ -27,6 +27,22 @@ def test_smoke_returns_sentinel_value() -> None:
 
 def test_smoke_honors_explicit_locale_kwarg() -> None:
     assert ryzic_i18n.t("i18n.smoke", locale="en_US") == "ok"
+
+
+def test_positive_placeholder_interpolation_renders_value() -> None:
+    """A real catalog key with ``%{var}`` interpolates the supplied value.
+
+    ``i18n.smoke`` has no placeholder, so the success path of ``%{name}``
+    substitution is otherwise only exercised transitively (via
+    ``broadcast_t`` callers). Asserting directly at the helper level catches
+    a regression that breaks interpolation while leaving the sentinel smoke
+    key passing. Uses ``ytdlp.error.generic_with_detail`` (a real en_US key
+    with a single ``%{detail}`` placeholder) so no test-only catalog
+    mutation is needed.
+    """
+    assert ryzic_i18n.t("ytdlp.error.generic_with_detail", detail="boom") == (
+        "Could not load that URL. yt-dlp said: `boom`"
+    )
 
 
 def test_missing_key_returns_key_and_logs(caplog: pytest.LogCaptureFixture) -> None:
@@ -60,18 +76,26 @@ def test_missing_placeholder_leaves_literal_and_logs(
         i18n.add_translation("i18n._test.greet", "", locale="en_US")
 
 
-def test_malformed_catalog_falls_back_to_returning_keys(
+def test_configure_does_not_crash_when_i18n_set_raises(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If ``_configure()`` raises, ``t()`` must still return something.
+    """If ``i18n.set`` raises mid-``_configure()``, the bot still boots.
 
-    We simulate the failure by monkeypatching ``i18n.set`` to raise, then
-    re-running ``_configure()`` and asserting the exception was swallowed
-    and logged. The sentinel key remains resolvable because the process-
-    level i18nice state from import time is still loaded — what this test
-    really proves is the try/except guard around ``_configure()`` itself
-    doesn't crash the bot.
+    Simulates a catalog/configuration failure by monkeypatching ``i18n.set``
+    to raise, then re-running ``_configure()``. The try/except guard must
+    swallow the exception and log it. ``t()`` still returns the raw key for
+    any input via the process-level i18nice state from import time.
+
+    Renamed from ``test_malformed_catalog_falls_back_to_returning_keys``:
+    the previous name claimed a "malformed catalog" exercise, but the test
+    never pointed ``load_path`` at a bad file — it only proved the
+    ``_configure()`` try/except guard doesn't crash. Renaming (rather than
+    rewriting to load a real malformed JSON file) is the honest, minimal
+    fix; a true malformed-catalog test would require re-pointing the
+    process-global ``i18n.load_path`` and re-running ``_configure()``,
+    which risks polluting other tests under pytest-randomly for marginal
+    extra coverage (the try/except is the actual safety net).
     """
     import i18n
 
