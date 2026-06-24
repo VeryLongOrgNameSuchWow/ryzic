@@ -183,8 +183,10 @@ class FakePlayer:
         self.current = None
 
     async def seek(self, position_ms: int) -> None:
+        # Mirrors real ``lavalink.DefaultPlayer.seek``: records the call but
+        # does not update ``position``. Tests that need a specific rendered
+        # position set ``player.position`` directly.
         self.seek_calls.append(position_ms)
-        self.position = position_ms
 
 
 class FakePlayerManager:

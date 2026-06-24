@@ -208,6 +208,22 @@ async def refresh(bot: hikari.GatewayBot, guild_id: int) -> None:
     await _render_for_player(bot, guild_id, channel_id)
 
 
+async def refresh_with_position(bot: hikari.GatewayBot, guild_id: int, position_ms: int) -> None:
+    """Re-render the existing controller with ``position_ms`` as the progress
+    position; no-op if none has been posted.
+
+    Like :func:`refresh` but the progress bar shows ``position_ms`` instead of
+    ``player.position``. Only the position is overridden — paused/connected
+    state and queue depth still come from the live player, so the button row
+    and title match a plain refresh.
+    """
+    record = _controllers.get(guild_id)
+    if record is None:
+        return
+    channel_id = record[0]
+    await _render_for_player(bot, guild_id, channel_id, position_ms=position_ms)
+
+
 async def refresh_all(bot: hikari.GatewayBot) -> None:
     """Refresh all active controllers whose progress is actually moving.
 
@@ -246,8 +262,19 @@ async def refresh_all(bot: hikari.GatewayBot) -> None:
             _log.debug("periodic refresh failed for guild %d", guild_id, exc_info=True)
 
 
-async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: int) -> None:
-    """Pull current player state and render the controller into ``channel_id``."""
+async def _render_for_player(
+    bot: hikari.GatewayBot,
+    guild_id: int,
+    channel_id: int,
+    *,
+    position_ms: int | None = None,
+) -> None:
+    """Pull current player state and render the controller into ``channel_id``.
+
+    ``position_ms`` overrides the progress-bar position without touching any
+    other rendered state (paused/connected title + button row, queue depth
+    still come from the live player).
+    """
     player = lavalink_glue.get_player(guild_id)
     if player is None or player.current is None:
         await _render_idle(bot, guild_id, channel_id)
@@ -261,9 +288,10 @@ async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: 
         await _render_idle(bot, guild_id, channel_id)
         return
 
+    render_position = player.position if position_ms is None else position_ms
     embed = ux.build_now_playing_embed(
         info,
-        position_ms=player.position,
+        position_ms=render_position,
         paused=player.paused,
         queue_length=len(player.queue),
         locale="en_US",

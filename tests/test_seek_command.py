@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
-from ryzic import lavalink_glue
+from ryzic import lavalink_glue, now_playing, ux
 from ryzic.commands import seek as seek_module
 from ryzic.i18n import t
 from tests._command_helpers import (
@@ -16,6 +17,7 @@ from tests._command_helpers import (
     both_in_voice,
     context_for,
     install_lavalink_client,
+    make_track_info,
 )
 
 
@@ -175,6 +177,64 @@ async def test_bare_seconds_treated_as_absolute() -> None:
 
     # Bare 45 → 45s absolute, NOT a relative jump from current position.
     assert player.seek_calls == [45_000]
+
+
+async def test_seek_success_refreshes_now_playing_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#223: /seek re-renders the controller with the seek target, not the
+    stale ``player.position`` a plain refresh would show.
+
+    Registers a controller + ``bot.rest`` recorder and captures the
+    ``position_ms`` handed to :func:`ux.build_now_playing_embed`; the spy
+    pattern (instead of asserting on the formatted embed field) keeps the
+    assertion robust against i18n template changes.
+    """
+    bot = both_in_voice()
+
+    edit_calls: list[dict[str, Any]] = []
+
+    async def _edit_message(channel_id: int, message_id: int, **kwargs: Any) -> Any:
+        edit_calls.append({"channel_id": channel_id, "message_id": message_id, **kwargs})
+
+    cast(Any, bot).rest = SimpleNamespace(edit_message=_edit_message)
+
+    ctx = context_for(bot)
+    _, player = _player_with_track(duration_ms=213_000, position_ms=10_000)
+    ux.attach_track_info(player.current, make_track_info())
+    now_playing._controllers[111] = (555, 9000)
+
+    captured_positions: list[int] = []
+    real_build = ux.build_now_playing_embed
+
+    def _capture_build(
+        track: Any,
+        *,
+        position_ms: int,
+        paused: bool,
+        queue_length: int,
+        locale: str,
+    ) -> Any:
+        captured_positions.append(position_ms)
+        return real_build(
+            track,
+            position_ms=position_ms,
+            paused=paused,
+            queue_length=queue_length,
+            locale=locale,
+        )
+
+    monkeypatch.setattr(ux, "build_now_playing_embed", _capture_build)
+
+    await seek_module._handle_seek(ctx, "1:30")
+
+    assert player.seek_calls == [90_000]
+    # FakePlayer.seek mirrors the real client: it does not set position, so
+    # player.position stays at the pre-seek value — the override is the
+    # only source of the rendered target.
+    assert player.position == 10_000
+    assert captured_positions == [90_000]
+    assert len(edit_calls) == 1
 
 
 async def test_seek_disconnected_but_current_responds_reconnecting() -> None:
