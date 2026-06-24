@@ -212,14 +212,29 @@ async def refresh_all(bot: hikari.GatewayBot) -> None:
     """Refresh all active controllers whose progress is actually moving.
 
     Used by the bot's background loop to advance progress bars. Skips
-    paused / idle / disconnected players so we don't issue byte-identical
-    edits every cycle (their state only changes via an event, which
-    already routes through :func:`refresh`). Staggers updates to spread
-    concurrent in-flight REST requests.
+    idle players and paused players that are connected — their render is
+    byte-identical between cycles, so re-editing would waste the Discord
+    per-message edit budget (state only changes via an event, which
+    already routes through :func:`refresh`). A disconnected player (the
+    #215 resync window — ``is_connected=False`` with a held track) is NOT
+    skipped: re-rendering it keeps the controller's buttons disabled via
+    :func:`_render_for_player`, closing the #222 gap where the controller
+    advertised live buttons the command side rejects. A playing player
+    auto-recovers to enabled buttons on the next cycle once
+    ``is_connected`` returns True. A paused player is skipped again once it
+    reconnects (paused+connected), so its controller stays disabled until
+    the next user-initiated ``/resume`` *after reconnection* — a bounded
+    transient, strictly safer than the #222 defect (disabled-when-should-
+    be-enabled beats enabled-when-should-be-disabled). No separate
+    recovery hook is needed. Staggers updates to spread concurrent
+    in-flight REST requests.
     """
     for guild_id in list(_controllers.keys()):
         player = lavalink_glue.get_player(guild_id)
-        if player is None or player.paused or player.current is None:
+        # Skip paused only when connected: a paused controller is static
+        # (byte-identical re-render), but a disconnected+paused player must
+        # still be re-rendered so its buttons flip to disabled (#222).
+        if player is None or player.current is None or (player.paused and player.is_connected):
             continue
         try:
             await refresh(bot, guild_id)
@@ -253,7 +268,25 @@ async def _render_for_player(bot: hikari.GatewayBot, guild_id: int, channel_id: 
         queue_length=len(player.queue),
         locale="en_US",
     )
-    components = _build_components_paused() if player.paused else _build_components()
+    # Disconnected takes precedence over paused: a player in the #215
+    # resync window (``is_connected=False`` but ``current`` held) must not
+    # advertise a clickable Resume even when paused. The command-side
+    # guard (``voice_check.check_player_or_respond``) rejects
+    # /pause /resume /seek /skip with "Reconnecting to voice" in this
+    # state, so the controller reuses the held-track embed (the idle
+    # embed's "No tracks playing" copy is factually wrong — ``current`` is
+    # still held) paired with all-disabled buttons. ``refresh_all`` does
+    # NOT skip a disconnected player (the paused-skip is narrowed to the
+    # connected case), so a playing player auto-recovers to enabled
+    # buttons once ``is_connected`` returns True; a paused player is
+    # skipped again once reconnected, so its controller stays disabled
+    # until the next user-initiated ``/resume`` after reconnection.
+    if not player.is_connected:
+        components = _build_idle_components()
+    elif player.paused:
+        components = _build_components_paused()
+    else:
+        components = _build_components()
     await _post_or_edit(bot, guild_id, channel_id, embed=embed, components=components)
 
 
