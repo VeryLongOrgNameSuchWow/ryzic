@@ -7,7 +7,7 @@ from typing import cast
 import hikari
 import lightbulb
 
-from .. import lavalink_glue
+from .. import lavalink_glue, now_playing
 from ..i18n import locale_for_ephemeral, locale_for_public, t
 from ..ux import format_duration, parse_seek_position
 from ..voice_check import check_player_or_respond, ensure_same_voice
@@ -76,3 +76,4 @@ async def _handle_seek(ctx: lightbulb.Context, raw_position: str) -> None:
             position=format_duration(target_ms),
         )
     )
+    await now_playing.refresh(cast(hikari.GatewayBot, ctx.client.app), guild_id)

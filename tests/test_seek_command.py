@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import hikari
 import pytest
 
 from ryzic import lavalink_glue
@@ -132,6 +133,51 @@ async def test_absolute_seek_invokes_player() -> None:
     assert fake.responses[0][0] == t("seek.success.jumped", locale="en_US", position="1:30")
     assert fake.responses[0][0] == "Jumped to 1:30."
     assert "ephemeral" not in fake.responses[0][1]
+
+
+async def test_successful_seek_refreshes_now_playing_controller() -> None:
+    """#223: /seek must call now_playing.refresh after a successful seek,
+    matching /pause and /resume so the controller updates immediately."""
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    _, player = _player_with_track(duration_ms=213_000, position_ms=10_000)
+
+    refresh_calls: list[int] = []
+    original_refresh = seek_module.now_playing.refresh
+
+    async def spy_refresh(_bot: hikari.GatewayBot, guild_id: int) -> None:
+        refresh_calls.append(guild_id)
+
+    seek_module.now_playing.refresh = spy_refresh  # ty: ignore[invalid-assignment]
+    try:
+        await seek_module._handle_seek(ctx, "1:30")
+    finally:
+        seek_module.now_playing.refresh = original_refresh
+
+    assert player.seek_calls == [90_000]
+    assert refresh_calls == [111]
+
+
+async def test_unknown_duration_does_not_refresh_now_playing_controller() -> None:
+    """Early-return paths must not trigger a controller refresh."""
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    _, player = _player_with_track(duration_ms=0)
+
+    refresh_calls: list[int] = []
+    original_refresh = seek_module.now_playing.refresh
+
+    async def spy_refresh(_bot: hikari.GatewayBot, guild_id: int) -> None:
+        refresh_calls.append(guild_id)
+
+    seek_module.now_playing.refresh = spy_refresh  # ty: ignore[invalid-assignment]
+    try:
+        await seek_module._handle_seek(ctx, "1:30")
+    finally:
+        seek_module.now_playing.refresh = original_refresh
+
+    assert player.seek_calls == []
+    assert refresh_calls == []
 
 
 async def test_relative_seek_adds_to_position() -> None:
