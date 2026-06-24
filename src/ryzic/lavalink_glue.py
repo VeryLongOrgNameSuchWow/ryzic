@@ -94,6 +94,11 @@ last_play_channel: dict[int, int] = {}
 auto_leave_tasks: dict[int, asyncio.Task[None]] = {}
 _voice_ready_events: dict[int, asyncio.Event] = {}
 
+# Guilds where an explicit /leave owns teardown. Backstop for the #218
+# dispatch-boundary the dict-keyed _cancel_auto_leave can't reach; see
+# the guard in _auto_leave.
+_explicit_leave_in_progress: set[int] = set()
+
 # Guilds with pending intentional disconnects, keyed by guild_id to the
 # ``time.monotonic()`` stamp recorded when the disconnect was initiated.
 # When the bot initiates a disconnect (Leave button, /leave, auto-leave), we
@@ -203,6 +208,20 @@ def _cancel_auto_leave(guild_id: int) -> None:
         task.cancel()
 
 
+def begin_explicit_leave(guild_id: int) -> None:
+    """Mark ``guild_id`` as mid-explicit-/leave so ``_auto_leave`` defers.
+
+    Cross-module API: ``commands.leave`` calls this before its first await.
+    Pairs with :func:`end_explicit_leave` (clear it in a ``finally``).
+    """
+    _explicit_leave_in_progress.add(guild_id)
+
+
+def end_explicit_leave(guild_id: int) -> None:
+    """Clear the explicit-leave marker (idempotent; safe to call when none set)."""
+    _explicit_leave_in_progress.discard(guild_id)
+
+
 def _start_auto_leave(bot: hikari.GatewayBot, guild_id: int) -> None:
     """Schedule the disconnect timer for ``guild_id``.
 
@@ -242,7 +261,16 @@ async def _auto_leave(bot: hikari.GatewayBot, guild_id: int, seconds: int) -> No
         clear_intentional_disconnect(guild_id)
         _log.exception("auto-leave: failed to disconnect from guild %d", guild_id)
 
-    _reset_voice_ready(guild_id)
+    # An explicit /leave may have taken ownership of teardown while we awaited
+    # update_voice_state — the #218 dispatch boundary, where our sleep
+    # completed and we self-popped before /leave's handler ran (so
+    # _cancel_auto_leave's dict-keyed cancel could not reach us). Bow out
+    # before the teardown + broadcast: /leave runs _teardown_player_session,
+    # and our "idle, disconnecting" message would duplicate its "left" reply.
+    if guild_id in _explicit_leave_in_progress:
+        return
+
+    await _teardown_player_session(bot, guild_id, player)
     await _send_to_last_play_channel(
         bot,
         guild_id,
@@ -785,6 +813,7 @@ def _reset_state_for_test() -> None:
             task.cancel()
     last_play_channel.clear()
     auto_leave_tasks.clear()
+    _explicit_leave_in_progress.clear()
     _auto_leave_seconds = DEFAULT_AUTO_LEAVE_SECONDS
     _voice_ready_events.clear()
     _pending_intentional_disconnects.clear()
