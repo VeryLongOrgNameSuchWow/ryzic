@@ -225,6 +225,248 @@ async def test_refresh_recovers_from_deleted_message_by_reposting() -> None:
 
 
 # ---------------------------------------------------------------------------
+# #222 — disconnected render path (is_connected=False with current held)
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_renders_disabled_buttons_when_disconnected() -> None:
+    """#215/#222: a held track with ``is_connected=False`` is the resync window.
+
+    The command-side guard rejects /pause /resume /seek /skip with
+    "Reconnecting to voice"; the controller must not advertise live buttons
+    either. The held-track embed is reused (NOT the idle embed — ``current``
+    is still held), and every button is disabled.
+    """
+    rest = _FakeRest(create_returns=9700)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="Held Track")
+    lavalink_glue.last_play_channel[111] = 555
+    await now_playing.upsert_for_track_start(bot, 111)
+    rest.edit_calls.clear()
+
+    # Lavalink reports disconnected while still holding the track.
+    player.is_connected = False
+    await now_playing.refresh(bot, 111)
+
+    assert len(rest.edit_calls) == 1
+    edit = rest.edit_calls[0]
+    embed: hikari.Embed = edit["embed"]
+    # Held-track embed, not the idle embed (whose "No tracks playing" copy
+    # would be factually wrong — current is retained per #215).
+    assert embed.title == t("ux.np.title.playing", locale="en_US")
+    [row] = edit["components"]
+    assert _disabled_in_row(row) == [True, True, True]
+
+
+async def test_refresh_all_does_not_skip_disconnected_player() -> None:
+    """#222: ``refresh_all`` deliberately re-renders disconnected players.
+
+    The skip predicate does not skip a disconnected player (the paused
+    term is narrowed to the connected case): re-rendering keeps the
+    disabled-buttons visual during the resync window and is what
+    auto-recovers to enabled buttons once ``is_connected`` returns True.
+    Pins the decision so a future "optimization" adding ``is_connected``
+    to the predicate doesn't silently drop the visual.
+    """
+    rest = _FakeRest(create_returns=9800)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+
+    # Guild 111: PLAYING (control). Guild 222: disconnected but current held.
+    for guild_id, connected in [(111, True), (222, False)]:
+        player = ll.player_manager.create(guild_id=guild_id)
+        player.is_connected = connected
+        player.current = make_track_with_info()
+        lavalink_glue.last_play_channel[guild_id] = guild_id * 10
+        await now_playing.upsert_for_track_start(bot, guild_id)
+    rest.edit_calls.clear()
+
+    await now_playing.refresh_all(bot)
+
+    edited_channels = {call["channel_id"] for call in rest.edit_calls}
+    # Both re-rendered: the connected one advances progress, the
+    # disconnected one re-renders disabled buttons.
+    assert edited_channels == {111 * 10, 222 * 10}
+    disconnected_edit = next(c for c in rest.edit_calls if c["channel_id"] == 222 * 10)
+    [row] = disconnected_edit["components"]
+    assert _disabled_in_row(row) == [True, True, True]
+
+
+async def test_refresh_all_renders_disabled_for_disconnected_paused() -> None:
+    """#222 regression: ``refresh_all`` must re-render a disconnected+PAUSED player.
+
+    The paused-skip is narrowed to the connected case, so a paused player
+    that enters the resync window (``is_connected=False``) is still
+    re-rendered with disabled buttons. With the pre-fix predicate
+    (``player.paused`` short-circuits before ``is_connected``) this player
+    is skipped every cycle and its controller keeps an enabled Resume
+    button — the exact #222 defect. Fails on the pre-fix predicate; passes
+    after. (The 4014 teardown path bounds this window in practice; the
+    non-4014 resync window leaves the record intact.)
+    """
+    rest = _FakeRest(create_returns=9810)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.paused = True
+    player.current = make_track_with_info(title="Paused & Disconnected")
+    lavalink_glue.last_play_channel[111] = 555
+    await now_playing.upsert_for_track_start(bot, 111)
+    rest.edit_calls.clear()
+
+    player.is_connected = False  # disconnected while paused
+    await now_playing.refresh_all(bot)
+
+    assert len(rest.edit_calls) == 1
+    edit = rest.edit_calls[0]
+    [row] = edit["components"]
+    assert _disabled_in_row(row) == [True, True, True]
+    # Held-track embed keeps the Paused title; only the buttons change.
+    assert edit["embed"].title == t("ux.np.title.paused", locale="en_US")
+
+
+async def test_refresh_re_enables_buttons_after_reconnect() -> None:
+    """#222: a playing player's buttons auto-recover on reconnect.
+
+    ``refresh_all`` re-renders a disconnected player with disabled buttons,
+    and once ``is_connected`` returns True the next cycle renders enabled
+    buttons again — no separate recovery hook. Pins the auto-recovery
+    transition so a future regression making the disabled state sticky
+    (cached components, or skipping disconnected players) is caught.
+    """
+    rest = _FakeRest(create_returns=9820)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = make_track_with_info(title="Recovering")
+    lavalink_glue.last_play_channel[111] = 555
+    await now_playing.upsert_for_track_start(bot, 111)
+    rest.edit_calls.clear()
+
+    # Disconnect: the controller flips to disabled buttons.
+    player.is_connected = False
+    await now_playing.refresh_all(bot)
+    [row] = rest.edit_calls[-1]["components"]
+    assert _disabled_in_row(row) == [True, True, True]
+
+    # Reconnect: the next refresh_all cycle re-enables the buttons.
+    rest.edit_calls.clear()
+    player.is_connected = True
+    await now_playing.refresh_all(bot)
+    assert len(rest.edit_calls) == 1
+    [row] = rest.edit_calls[-1]["components"]
+    assert _disabled_in_row(row) == [False, False, False]
+
+
+async def test_refresh_all_leaves_paused_controller_disabled_until_resume_after_reconnect() -> None:
+    """Pins the documented paused-reconnect residual (#222 follow-up review).
+
+    A paused player that disconnects is re-rendered with disabled buttons
+    (the fix). Once it reconnects while STILL paused, ``refresh_all`` skips
+    it again (paused+connected => byte-identical), so the controller stays
+    on the disabled render until the next user-initiated ``/resume`` after
+    reconnection. This is a bounded transient and strictly safer than the
+    #222 defect (disabled-when-should-be-enabled, vs the original
+    enabled-when-should-be-disabled). A future fix that re-enables the
+    paused row on reconnect should update this test.
+    """
+    rest = _FakeRest(create_returns=9821)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.paused = True
+    player.current = make_track_with_info(title="Paused Reconnect")
+    lavalink_glue.last_play_channel[111] = 555
+    await now_playing.upsert_for_track_start(bot, 111)
+    rest.edit_calls.clear()
+
+    # Disconnect while paused: the controller flips to disabled buttons.
+    player.is_connected = False
+    await now_playing.refresh_all(bot)
+    [row] = rest.edit_calls[-1]["components"]
+    assert _disabled_in_row(row) == [True, True, True]
+
+    # Reconnect while still paused: refresh_all skips it (paused+connected),
+    # so no edit lands and the controller stays on the disabled render.
+    rest.edit_calls.clear()
+    player.is_connected = True
+    await now_playing.refresh_all(bot)
+    assert rest.edit_calls == []
+
+
+async def test_upsert_renders_disabled_buttons_when_disconnected() -> None:
+    """#222: the create path also renders disabled buttons when disconnected.
+
+    ``upsert_for_track_start`` -> ``_render_for_player`` shares the
+    disconnected branch, so a track that starts during the resync window
+    renders with disabled buttons (not the enabled row). TrackStart
+    normally implies a voice connection, but the branch is shared and the
+    case is cheap to pin.
+    """
+    rest = _FakeRest(create_returns=9830)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = False
+    player.current = make_track_with_info(title="Started While Disconnected")
+    lavalink_glue.last_play_channel[111] = 555
+
+    await now_playing.upsert_for_track_start(bot, 111)
+
+    assert len(rest.create_calls) == 1
+    call = rest.create_calls[0]
+    [row] = call["components"]
+    assert _disabled_in_row(row) == [True, True, True]
+    embed: hikari.Embed = call["embed"]
+    assert embed.title == t("ux.np.title.playing", locale="en_US")
+
+
+async def test_render_disconnected_takes_precedence_over_paused() -> None:
+    """#222: a disconnected+paused player shows disabled buttons, not Resume.
+
+    Disconnected must win over paused in the component selection — a
+    disconnected player must not advertise a clickable Resume even when the
+    held track is also paused.
+    """
+    rest = _FakeRest(create_returns=9900)
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.paused = True
+    player.current = make_track_with_info(title="Paused & Disconnected")
+    lavalink_glue.last_play_channel[111] = 555
+    await now_playing.upsert_for_track_start(bot, 111)
+    rest.edit_calls.clear()
+
+    player.is_connected = False  # disconnected while paused
+    await now_playing.refresh(bot, 111)
+
+    assert len(rest.edit_calls) == 1
+    edit = rest.edit_calls[0]
+    [row] = edit["components"]
+    # All disabled — no enabled Resume button from the paused row.
+    assert _disabled_in_row(row) == [True, True, True]
+    # The held-track embed keeps the Paused title (paused=player.paused is
+    # passed through); only the buttons change. Pins the body so a future
+    # "Reconnecting" title variant doesn't silently change visible copy.
+    assert edit["embed"].title == t("ux.np.title.paused", locale="en_US")
+
+
+# ---------------------------------------------------------------------------
 # refresh_all — per-guild skip filter + exception isolation (#200)
 # ---------------------------------------------------------------------------
 
@@ -449,6 +691,13 @@ def _labels_in_row(row: hikari.api.MessageActionRowBuilder) -> list[str]:
     payload, _ = row.build()
     components = payload["components"]
     return [comp["label"] for comp in components]
+
+
+def _disabled_in_row(row: hikari.api.MessageActionRowBuilder) -> list[bool]:
+    """Extract per-button ``disabled`` flags from an action-row builder."""
+    payload, _ = row.build()
+    components = payload["components"]
+    return [bool(comp["disabled"]) for comp in components]
 
 
 def test_active_row_renders_expected_button_labels() -> None:
