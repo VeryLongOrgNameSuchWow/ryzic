@@ -55,6 +55,11 @@ class FakeBot:
         self._me = FakeUser(bot_user_id)
         self.cache = FakeCache(states or {})
         self.update_voice_state_calls: list[tuple[int, int | None]] = []
+        # When set, update_voice_state raises this after recording the call.
+        # Repeatable — fires on every call until the test clears it — so a
+        # multi-call regression never silently turns a second failure into a
+        # no-op success. Default None keeps the historical no-op recorder.
+        self.update_voice_state_exc: BaseException | None = None
 
     def get_me(self) -> FakeUser:
         return self._me
@@ -66,7 +71,12 @@ class FakeBot:
         *,
         self_deaf: bool = False,
     ) -> None:
+        # Record before raising so tests can still assert the disconnect was
+        # attempted (matches real bot semantics: the call was made, then it
+        # failed).
         self.update_voice_state_calls.append((guild_id, channel_id))
+        if self.update_voice_state_exc is not None:
+            raise self.update_voice_state_exc
 
 
 class FakeLightbulbClient:
