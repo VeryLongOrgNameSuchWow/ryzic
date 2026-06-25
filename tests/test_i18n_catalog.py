@@ -66,13 +66,14 @@ _RAILS_VARIANTS = frozenset({"zero", "one", "few", "many"})
 _NON_VAR_KWARGS = frozenset({"locale", "default"})
 _PLACEHOLDER_RE = re.compile(r"%\{(\w+)\}")
 
-# The one dynamic ``FetchFailed(key)`` raise site (``src/ryzic/ytdlp.py``).
-# ``key`` is assigned from ``_FRIENDLY_ERROR_KEYS`` (a dict literal of
-# string-literal values), so the candidate set is statically resolvable
-# without an allowlist entry. The allowlist below is reserved for FUTURE
-# dynamic sites whose key genuinely cannot be traced to a literal source —
-# adding one requires an explicit entry here plus a rationale comment.
-_YTDLP_DYNAMIC_FETCHFAILED_SITE = "src/ryzic/ytdlp.py:276"
+# Shared anchor name: the dynamic-site recognizer (see "Dynamic FetchFailed
+# site recognition" section below) and the candidate resolver both key off
+# this constant, so a rename of ``_FRIENDLY_ERROR_KEYS`` breaks both in
+# lockstep (loud, pointing at the rename) rather than one path silently
+# masking the other. The allowlist below is reserved for FUTURE dynamic
+# sites whose key genuinely cannot be traced to a literal source — adding
+# one requires an explicit entry here plus a rationale comment.
+_FRIENDLY_ERROR_KEYS_NAME = "_FRIENDLY_ERROR_KEYS"
 _DYNAMIC_FETCHFAILED_ALLOWLIST: frozenset[str] = frozenset()
 
 
@@ -189,6 +190,187 @@ def _site_loc(site: RenderSite) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Dynamic FetchFailed site recognition (AST identity, not line number)
+# --------------------------------------------------------------------------- #
+#
+# The one dynamic ``raise FetchFailed(key)`` site in ``ytdlp.py`` is
+# recognized by the AST shape of its key's provenance — a bare ``Name``
+# first arg bound in the enclosing function scope by an assignment of the
+# exact shape ``var = next(<GeneratorExp over _FRIENDLY_ERROR_KEYS.items()>,
+# <optional default>)``. Recognizing by shape (never by ``lineno``) makes
+# the locator robust to benign line shifts above the raise. Any other
+# dynamic site — one whose key is not bound by that shape — falls through
+# to the empty ``_DYNAMIC_FETCHFAILED_ALLOWLIST`` and fails the gate loud,
+# the fail-loud-by-default contract issue #220 requires.
+
+
+def _enclosing_function_by_lineno(
+    tree: ast.AST, lineno: int
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """Innermost function whose source range contains ``lineno``, or ``None``.
+
+    Among all functions whose ``[lineno, end_lineno]`` contains ``lineno``,
+    the innermost is the one with the greatest start line (a nested def
+    always starts after its enclosing def).
+    """
+    best: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        start = node.lineno
+        end = node.end_lineno or start
+        if start <= lineno <= end and (best is None or start > best.lineno):
+            best = node
+    return best
+
+
+def _iter_body_stmts(stmts: Iterable[ast.stmt]) -> Iterator[ast.stmt]:
+    """Yield statements within a function body, recursing into compound
+    statement bodies (``if``/``with``/``try``/``except``/``for``/``while``)
+    but NOT into nested ``def``/``class`` bodies.
+
+    The binding and the raise both live in an ``except`` handler body, so
+    the iterator must descend into handler bodies. It must NOT descend into
+    nested defs: a ``key = next(_FRIENDLY_ERROR_KEYS.items()...)`` inside a
+    nested function is a different scope and must not satisfy recognition
+    for a raise in the outer function.
+    """
+    for stmt in stmts:
+        yield stmt
+        bodies: list[list[ast.stmt]] = []
+        if isinstance(stmt, ast.If):
+            bodies.append(stmt.body)
+            bodies.append(stmt.orelse)
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            bodies.append(stmt.body)
+        elif isinstance(stmt, ast.Try):
+            bodies.append(stmt.body)
+            bodies.extend(handler.body for handler in stmt.handlers)
+            bodies.append(stmt.orelse)
+            bodies.append(stmt.finalbody)
+        elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            bodies.append(stmt.body)
+            bodies.append(stmt.orelse)
+        # FunctionDef / AsyncFunctionDef / ClassDef intentionally NOT recursed.
+        for body in bodies:
+            yield from _iter_body_stmts(body)
+
+
+def _is_friendly_error_next_call(value: ast.expr) -> bool:
+    """True iff ``value`` is ``next(<GeneratorExp>, <optional default>)``
+    whose single comprehension's iterable is
+    ``<_FRIENDLY_ERROR_KEYS_NAME>.items()`` AND the comprehension carries at
+    least one ``if``-filter.
+
+    STRICT by design: matches the exact binding shape at ``ytdlp.py`` —
+    ``key = next((k for substr, k in _FRIENDLY_ERROR_KEYS.items() if ...), None)``.
+    The ``if``-filter is load-bearing (without it ``key`` is always the first
+    dict value, not the substring match), so a filter-less genexp is rejected.
+    Also rejects for-loops, walrus (``NamedExpr``), and ``.keys()``/direct
+    iteration; those refactors trip the gate loud by default (issue #220's
+    fail-loud contract), forcing a re-review rather than silently blessing a
+    different resolution path.
+    """
+    if not isinstance(value, ast.Call):
+        return False
+    if not isinstance(value.func, ast.Name) or value.func.id != "next":
+        return False
+    if value.keywords or not value.args:
+        return False
+    gen = value.args[0]
+    if not isinstance(gen, ast.GeneratorExp) or len(gen.generators) != 1:
+        return False
+    comp = gen.generators[0]
+    if not comp.ifs:
+        return False  # the `if substr in detail` filter is load-bearing
+    iter_call = comp.iter
+    if not isinstance(iter_call, ast.Call) or iter_call.keywords:
+        return False
+    attr = iter_call.func
+    return (
+        isinstance(attr, ast.Attribute)
+        and attr.attr == "items"
+        and isinstance(attr.value, ast.Name)
+        and attr.value.id == _FRIENDLY_ERROR_KEYS_NAME
+    )
+
+
+def _recognized_friendly_error_dynamic_fetchfailed_site(site: RenderSite, tree: ast.AST) -> bool:
+    """True iff ``site`` is the dynamic ``FetchFailed(<Name>)`` raise whose
+    ``<Name>`` is bound in its enclosing function scope by a SINGLE,
+    unambiguous assignment of the exact shape ``var = next(<GeneratorExp over
+    _FRIENDLY_ERROR_KEYS.items()> with an ``if``-filter, <optional default>)``.
+
+    Accepts a pre-parsed ``tree`` (the ``ytdlp.py`` module tree) so meta-tests
+    can feed synthetic ``ast.parse(...)`` trees without temp files. The
+    enclosing function is found by source range over ``tree`` (never by
+    ``id(site.node)``, which would fail across separate parses). The binding
+    must be the ONLY assignment to ``<Name>`` before the raise in that
+    function's own scope — multiple assignments (e.g. a conditional
+    reassignment that hides an unvalidated literal key on one branch) would
+    let the gate bless the friendly-shaped branch while never checking the
+    other, so they are refused and the site fails loud.
+    """
+    if site.kind != "fetchfailed" or site.key is not None:
+        return False
+    args = site.node.args
+    if not args or not isinstance(args[0], ast.Name):
+        return False
+    raise_lineno = site.node.lineno
+    if raise_lineno is None:
+        return False
+    fn = _enclosing_function_by_lineno(tree, raise_lineno)
+    if fn is None:
+        return False
+    var = args[0].id
+    binding: ast.expr | None = None
+    assignments = 0
+    for stmt in _iter_body_stmts(fn.body):
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        target = stmt.targets[0]
+        if not isinstance(target, ast.Name) or target.id != var:
+            continue
+        if stmt.lineno >= raise_lineno:
+            continue
+        assignments += 1
+        binding = stmt.value
+    if assignments != 1:
+        return False  # zero or ambiguous binding — refuse, fail loud
+    assert binding is not None  # exactly one assignment above → binding was set
+    return _is_friendly_error_next_call(binding)
+
+
+def _recognized_dynamic_fetchfailed_site(
+    sites: Iterable[RenderSite],
+) -> tuple[RenderSite, ast.AST]:
+    """Recognize and return the one ``_FRIENDLY_ERROR_KEYS``-anchored dynamic
+    ``FetchFailed(key)`` raise site among ``sites``, plus the parsed ytdlp tree.
+
+    ``sites`` is the caller's own list (e.g. the gate test's ``all_sites``),
+    so the returned ``RenderSite`` is identity-equal to one of its elements —
+    letting the caller exclude it from the allowlist check by ``is``. Fails
+    loud (assertion) if zero or more than one site matches — the binding
+    shape or anchor name changed and a human must re-review. Shared by both
+    fetchfailed gate tests so they agree on what counts as "the" dynamic site.
+    """
+    ytdlp_path = _SRC_ROOT / "ytdlp.py"
+    tree = ast.parse(ytdlp_path.read_text(encoding="utf-8"), filename=str(ytdlp_path))
+    matched = [
+        s
+        for s in sites
+        if s.key is None
+        and s.path == ytdlp_path
+        and _recognized_friendly_error_dynamic_fetchfailed_site(s, tree)
+    ]
+    assert len(matched) == 1, (
+        f"expected exactly one _FRIENDLY_ERROR_KEYS-anchored dynamic FetchFailed site, "
+        f"found {len(matched)} — the binding shape or anchor name changed; re-review"
+    )
+    return matched[0], tree
+
+
+# --------------------------------------------------------------------------- #
 # String-literal scan (for orphan check)
 # --------------------------------------------------------------------------- #
 
@@ -250,16 +432,15 @@ def _template_placeholders(value: object) -> set[str]:
     return set()
 
 
-def _friendly_error_key_candidates() -> set[str]:
-    """Statically resolve the candidate keys for the dynamic ``FetchFailed(key)``
-    site at ``ytdlp.py:276`` by walking the ``_FRIENDLY_ERROR_KEYS`` dict literal.
+def _friendly_error_key_candidates(tree: ast.AST) -> set[str]:
+    """Statically resolve the candidate keys for the dynamic
+    ``FetchFailed(key)`` raise site by walking the ``_FRIENDLY_ERROR_KEYS``
+    dict literal in ``tree``.
 
     All values are string literals, so the candidate set is fully determined
     at parse time — no allowlist entry needed. If this dict ever gains a
     non-literal value, the gate fails and forces an explicit resolution path.
     """
-    ytdlp = _SRC_ROOT / "ytdlp.py"
-    tree = ast.parse(ytdlp.read_text(encoding="utf-8"), filename=str(ytdlp))
     for node in ast.walk(tree):
         target: ast.expr | None = None
         value: ast.expr | None = None
@@ -272,7 +453,7 @@ def _friendly_error_key_candidates() -> set[str]:
             value = node.value
         if (
             isinstance(target, ast.Name)
-            and target.id == "_FRIENDLY_ERROR_KEYS"
+            and target.id == _FRIENDLY_ERROR_KEYS_NAME
             and isinstance(value, ast.Dict)
         ):
             return {
@@ -441,29 +622,28 @@ def test_every_template_placeholder_is_passed_at_the_call_site() -> None:
 def test_every_fetchfailed_key_resolves_to_a_catalog_key() -> None:
     """``FetchFailed(key, **vars)`` carries a catalog key (#163 contract).
     Every construction site — src raise sites AND test fixtures — must
-    resolve to a real catalog key. Literal keys are checked directly;
-    the one dynamic site (``ytdlp.py:276`` ``raise FetchFailed(key)``)
-    is resolved via the ``_FRIENDLY_ERROR_KEYS`` dict literal. Any future
-    unresolvable dynamic site fails the gate and forces an explicit
-    ``_DYNAMIC_FETCHFAILED_ALLOWLIST`` entry + rationale.
+    resolve to a real catalog key. Literal keys are checked directly; the
+    one dynamic site is resolved via the ``_FRIENDLY_ERROR_KEYS`` dict
+    literal (recognition logic in ``_recognized_dynamic_fetchfailed_site``).
     """
     catalog = _load_catalog_strict()
     all_sites = [s for s in _walk_render_sites([_SRC_ROOT, _TESTS_ROOT]) if s.kind == "fetchfailed"]
-    # The known dynamic site is resolved via _FRIENDLY_ERROR_KEYS; exclude it
-    # from the helper (which would otherwise flag it as an unallowlisted
-    # dynamic site) and verify its candidates separately.
-    helper_sites = [s for s in all_sites if _site_loc(s) != _YTDLP_DYNAMIC_FETCHFAILED_SITE]
+    # The known dynamic site is resolved via _FRIENDLY_ERROR_KEYS; recognize it
+    # by AST identity and exclude it from the helper (which would otherwise
+    # flag it as an unallowlisted dynamic site). Verify its candidates separately.
+    matched_site, ytdlp_tree = _recognized_dynamic_fetchfailed_site(all_sites)
+    helper_sites = [s for s in all_sites if s is not matched_site]
     problems = _check_fetchfailed_keys(catalog, helper_sites, _DYNAMIC_FETCHFAILED_ALLOWLIST)
-    candidates = _friendly_error_key_candidates()
+    candidates = _friendly_error_key_candidates(ytdlp_tree)
     if not candidates:
         problems.append(
-            f"{_YTDLP_DYNAMIC_FETCHFAILED_SITE} — could not resolve _FRIENDLY_ERROR_KEYS "
+            f"{_site_loc(matched_site)} — could not resolve _FRIENDLY_ERROR_KEYS "
             "dict literal; the dynamic FetchFailed site is no longer statically resolvable"
         )
     for candidate in sorted(candidates):
         if candidate not in catalog:
             problems.append(
-                f"{_YTDLP_DYNAMIC_FETCHFAILED_SITE} candidate {candidate!r} — no such catalog key"
+                f"{_site_loc(matched_site)} candidate {candidate!r} — no such catalog key"
             )
     assert not problems, "FetchFailed key lint:\n  " + "\n  ".join(problems)
 
@@ -471,7 +651,7 @@ def test_every_fetchfailed_key_resolves_to_a_catalog_key() -> None:
 def test_every_fetchfailed_placeholder_is_passed_at_the_raise_site() -> None:
     """Each ``%{name}`` in a ``FetchFailed`` template must arrive as a
     ``name=...`` kwarg at the construction site. The dynamic
-    ``ytdlp.py:276`` site passes no kwargs, so every candidate template
+    ``FetchFailed(key)`` site passes no kwargs, so every candidate template
     there must be placeholder-free. Extra kwargs are accepted (parity with
     the ``t()`` lint). ``FetchFailed.__init__``'s internal ``t(key, **vars)``
     is NOT walked — it is covered transitively by this raise-site check.
@@ -479,12 +659,15 @@ def test_every_fetchfailed_placeholder_is_passed_at_the_raise_site() -> None:
     catalog = _load_catalog_strict()
     sites = list(_walk_render_sites([_SRC_ROOT, _TESTS_ROOT]))
     problems = _check_fetchfailed_kwargs(catalog, sites)
-    candidates = _friendly_error_key_candidates()
+    matched_site, ytdlp_tree = _recognized_dynamic_fetchfailed_site(
+        [s for s in sites if s.kind == "fetchfailed"]
+    )
+    candidates = _friendly_error_key_candidates(ytdlp_tree)
     for candidate in sorted(candidates):
         placeholders = _template_placeholders(catalog.get(candidate))
         if placeholders:
             problems.append(
-                f"{_YTDLP_DYNAMIC_FETCHFAILED_SITE} candidate {candidate!r} has placeholders "
+                f"{_site_loc(matched_site)} candidate {candidate!r} has placeholders "
                 f"{sorted(placeholders)!r} but the raise site passes no kwargs"
             )
     assert not problems, "FetchFailed kwarg lint:\n  " + "\n  ".join(problems)
@@ -543,6 +726,31 @@ def _synthetic_site(code: str, *, kind: str = "t", path: str = "<synthetic>") ->
     raise AssertionError(f"no Call node in synthetic snippet: {code!r}")
 
 
+def _synthetic_fetchfailed_site(tree: ast.AST, *, path: str = "<synthetic>") -> RenderSite:
+    """Build a ``RenderSite`` from the ``FetchFailed(...)`` Call in ``tree``.
+
+    Unlike ``_synthetic_site`` (which grabs the first ``Call`` and forces a
+    kind), this locates the ``FetchFailed``-kind Call via ``_render_kind`` so
+    a richer snippet — e.g. one that also contains a ``next(...)`` and an
+    ``.items()`` call — yields the FetchFailed site, not whichever Call
+    ``ast.walk`` happens to visit first. The returned site's ``node`` belongs
+    to the SAME tree the caller passes to the recognizer.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _render_kind(node.func) != "fetchfailed":
+            continue
+        first = node.args[0] if node.args else None
+        key = (
+            first.value
+            if isinstance(first, ast.Constant) and isinstance(first.value, str)
+            else None
+        )
+        literal_kwargs = {kw.arg: kw.value for kw in node.keywords if kw.arg is not None}
+        has_starstar = any(kw.arg is None for kw in node.keywords)
+        return RenderSite(Path(path), node, key, "fetchfailed", literal_kwargs, has_starstar)
+    raise AssertionError("no FetchFailed Call in synthetic tree")
+
+
 def test_meta_gate_catches_missing_key() -> None:
     site = _synthetic_site('t("foo.bar")')
     problems = _check_missing_keys({"other": "x"}, [site])
@@ -577,6 +785,143 @@ def test_meta_gate_catches_typo_fetchfailed_key() -> None:
     site = _synthetic_site('FetchFailed("ytdlp.error.bogus")', kind="fetchfailed")
     problems = _check_fetchfailed_keys(catalog, [site], _DYNAMIC_FETCHFAILED_ALLOWLIST)
     assert problems and "ytdlp.error.bogus" in problems[0]
+
+
+def test_meta_gate_recognizes_friendly_error_dynamic_fetchfailed_site() -> None:
+    """The recognizer accepts a dynamic ``FetchFailed(key)`` whose ``key`` is
+    bound by the exact ``next(<genexp over _FRIENDLY_ERROR_KEYS.items()>)``
+    shape in the enclosing function — the positive path with zero coverage
+    before this lock."""
+    tree = ast.parse(
+        "async def _extract():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except YoutubeDLError as exc:\n"
+        "        detail = ''\n"
+        "        key = next((k for substr, k in _FRIENDLY_ERROR_KEYS.items() "
+        "if substr in detail), None)\n"
+        "        raise FetchFailed(key) from exc\n"
+    )
+    site = _synthetic_fetchfailed_site(tree)
+    assert _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
+
+
+def test_meta_gate_rejects_foreign_dynamic_fetchfailed_site() -> None:
+    """A dynamic ``FetchFailed(key)`` whose ``key`` is NOT bound by the
+    ``_FRIENDLY_ERROR_KEYS`` ``next()`` shape is rejected by the recognizer
+    and then flagged by ``_check_fetchfailed_keys`` via the empty allowlist
+    (the two-step path a future unrelated dynamic site hits)."""
+    tree = ast.parse("async def fn():\n    key = something_else()\n    raise FetchFailed(key)\n")
+    site = _synthetic_fetchfailed_site(tree)
+    assert not _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
+    problems = _check_fetchfailed_keys({"x": "y"}, [site], _DYNAMIC_FETCHFAILED_ALLOWLIST)
+    assert problems and "dynamic" in problems[0]
+
+
+def test_meta_gate_rejects_refactored_friendly_error_binding() -> None:
+    """A for-loop binding of ``key`` is rejected: the recognizer accepts only
+    the ``next(<genexp over _FRIENDLY_ERROR_KEYS.items()>)`` shape, and the
+    for-loop's ``key = k`` is an ``ast.Name``, not a ``next()`` call."""
+    tree = ast.parse(
+        "async def fn():\n"
+        "    detail = ''\n"
+        "    key = None\n"
+        "    for substr, k in _FRIENDLY_ERROR_KEYS.items():\n"
+        "        if substr in detail:\n"
+        "            key = k\n"
+        "            break\n"
+        "    raise FetchFailed(key)\n"
+    )
+    site = _synthetic_fetchfailed_site(tree)
+    assert not _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
+
+
+def test_meta_gate_rejects_conditional_reassignment_of_friendly_binding() -> None:
+    """Two assignments to ``key`` (a literal branch + a friendly-shaped branch)
+    are refused — the dangerous direction the for-loop test does not cover,
+    where a friendly-shaped branch would otherwise be blessed while the
+    literal branch's key went unchecked."""
+    tree = ast.parse(
+        "async def fn():\n"
+        "    detail = ''\n"
+        "    if cond:\n"
+        "        key = 'ytdlp.error.fixed_key'\n"
+        "    else:\n"
+        "        key = next((k for substr, k in _FRIENDLY_ERROR_KEYS.items() "
+        "if substr in detail), None)\n"
+        "    raise FetchFailed(key)\n"
+    )
+    site = _synthetic_fetchfailed_site(tree)
+    assert not _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
+
+
+def test_meta_gate_rejects_nested_def_scope_binding() -> None:
+    """Locks the ``_iter_body_stmts`` non-descent-into-defs guard: a binding
+    inside a nested ``def`` must not satisfy recognition for an outer-scope
+    raise. This synthetic test is the only safeguard — the real ``ytdlp.py``
+    site has no nested def, so the live gate test can't catch a loosening."""
+    tree = ast.parse(
+        "async def outer():\n"
+        "    detail = ''\n"
+        "    def inner():\n"
+        "        key = next((k for substr, k in _FRIENDLY_ERROR_KEYS.items() "
+        "if substr in detail), None)\n"
+        "    inner()\n"
+        "    raise FetchFailed(key)\n"
+    )
+    site = _synthetic_fetchfailed_site(tree)
+    assert not _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
+
+
+def test_meta_gate_rejects_walrus_named_expr_binding() -> None:
+    """A walrus binding (``key := next(...)``) is rejected: the binding loop
+    inspects only ``ast.Assign``, so a ``NamedExpr`` embedded in an ``if`` test
+    is never found. Locks the Assign-only property, which is structurally
+    distinct from the for-loop rejection (a widened recognizer accepting
+    walrus would pass the for-loop test while silently blessing walrus)."""
+    tree = ast.parse(
+        "async def fn():\n"
+        "    detail = ''\n"
+        "    if (key := next((k for substr, k in _FRIENDLY_ERROR_KEYS.items() "
+        "if substr in detail), None)) is not None:\n"
+        "        raise FetchFailed(key)\n"
+    )
+    site = _synthetic_fetchfailed_site(tree)
+    assert not _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        # .keys() instead of .items()
+        "next((k for substr, k in _FRIENDLY_ERROR_KEYS.keys() if substr in detail), None)",
+        # .values() instead of .items()
+        "next((k for k in _FRIENDLY_ERROR_KEYS.values() if k in detail), None)",
+        # direct iteration of the dict instead of .items()
+        "next((k for k in _FRIENDLY_ERROR_KEYS if k in detail), None)",
+    ],
+    ids=["keys", "values", "bare-iter"],
+)
+def test_meta_gate_rejects_non_items_iterable_on_friendly_binding(binding: str) -> None:
+    """The anchor requires ``.items()``; ``.keys()``, ``.values()``, and direct
+    iteration of ``_FRIENDLY_ERROR_KEYS`` are all rejected."""
+    tree = ast.parse(
+        f"async def fn():\n    detail = ''\n    key = {binding}\n    raise FetchFailed(key)\n"
+    )
+    site = _synthetic_fetchfailed_site(tree)
+    assert not _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
+
+
+def test_meta_gate_rejects_filterless_friendly_error_genexp() -> None:
+    """A ``next(<genexp>)`` without the ``if``-filter is rejected — the filter
+    is load-bearing (see ``_is_friendly_error_next_call``)."""
+    tree = ast.parse(
+        "async def fn():\n"
+        "    key = next((k for substr, k in _FRIENDLY_ERROR_KEYS.items()), None)\n"
+        "    raise FetchFailed(key)\n"
+    )
+    site = _synthetic_fetchfailed_site(tree)
+    assert not _recognized_friendly_error_dynamic_fetchfailed_site(site, tree)
 
 
 def test_meta_gate_catches_duplicate_catalog_key() -> None:
