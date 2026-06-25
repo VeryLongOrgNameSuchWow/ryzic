@@ -45,6 +45,11 @@ class _FakeApp:
         self.created_messages: list[tuple[int, str]] = []
         self.voice_state_calls: list[tuple[int, int | None]] = []
         self._create_message_error = create_message_error
+        # When set, update_voice_state raises this after recording the call.
+        # Repeatable — fires on every call until the test clears it. Mirrors
+        # FakeBot (tests/_command_helpers.py); default None keeps the no-op
+        # recorder every existing bridge test relies on.
+        self.update_voice_state_exc: BaseException | None = None
 
     def get_me(self) -> _FakeOwnUser | None:
         return self._me
@@ -63,7 +68,12 @@ class _FakeApp:
         return None
 
     async def update_voice_state(self, guild_id: int, channel_id: int | None) -> None:
+        # Record before raising so tests can assert the disconnect was
+        # attempted (matches real bot semantics: the call was made, then
+        # it failed).
         self.voice_state_calls.append((guild_id, channel_id))
+        if self.update_voice_state_exc is not None:
+            raise self.update_voice_state_exc
 
 
 def _make_voice_server_event(
@@ -559,6 +569,25 @@ async def test_guild_leave_clears_per_guild_state() -> None:
     # The cancelled timer should settle.
     with pytest.raises(asyncio.CancelledError):
         await timer
+
+
+async def test_guild_leave_clears_intentional_disconnect_marker() -> None:
+    """_on_guild_leave drops any lingering intentional-disconnect marker.
+
+    This clear is NOT an except/error branch — it is unconditional per-guild
+    state cleanup, distinct from the try/except which wraps ``player_manager.destroy``.
+    Pinned regardless: a guild-leave
+    must not leak a marker that would suppress a later genuine voice_lost
+    broadcast if the bot re-joins. The existing
+    test_guild_leave_clears_per_guild_state never pre-sets the marker, so
+    this clear site was previously unpinned.
+    """
+    lavalink_glue.mark_intentional_disconnect(111)
+    assert 111 in lavalink_glue._pending_intentional_disconnects
+
+    await lavalink_glue._on_guild_leave(_make_guild_leave_event(111))
+
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
 
 
 async def test_track_exception_strips_markdown_and_caps_length() -> None:
@@ -1819,6 +1848,47 @@ async def test_auto_leave_calls_teardown_player_session(
     await lavalink_glue._auto_leave(cast(hikari.GatewayBot, bot), guild_id, 45)
 
     assert teardown_calls == [guild_id]
+
+
+async def test_auto_leave_clears_intentional_disconnect_when_update_voice_state_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#198: a failed auto-leave disconnect clears the intentional-disconnect marker.
+
+    The except branch in _auto_leave clears the marker and logs; unlike
+    _handle_leave it does NOT re-raise. Without this
+    clear, a failed disconnect would leave a stale marker that suppresses a
+    later genuine voice_lost broadcast. _FakeApp.update_voice_state is a no-op
+    by default, so this path is unreachable without a raisable bot.
+    """
+    bot = _FakeApp()
+    guild_id = 111
+
+    class _ConnectedPlayer:
+        is_connected = True
+        queue: ClassVar[list[Any]] = []
+
+    class _ConnectedPlayerManager:
+        def get(self, gid: int) -> _ConnectedPlayer:
+            return _ConnectedPlayer()
+
+    class _ConnectedClient:
+        player_manager = _ConnectedPlayerManager()
+
+    lavalink_glue._set_lavalink_client_for_test(cast(lavalink.Client, _ConnectedClient()))
+
+    async def _spy_sleep(_: float) -> None:
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", _spy_sleep)
+    bot.update_voice_state_exc = RuntimeError("auto-leave disconnect failed")
+
+    await lavalink_glue._auto_leave(cast(hikari.GatewayBot, bot), guild_id, 45)
+
+    # The disconnect attempt was recorded before the raise.
+    assert bot.voice_state_calls == [(guild_id, None)]
+    # #198 error-path: marker cleared by the except branch despite the raise.
+    assert guild_id not in lavalink_glue._pending_intentional_disconnects
 
 
 async def test_4014_after_auto_leave_is_noop_teardown() -> None:

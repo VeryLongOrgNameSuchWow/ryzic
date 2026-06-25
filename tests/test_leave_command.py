@@ -108,6 +108,37 @@ async def test_leave_stops_clears_disconnects_and_responds() -> None:
     assert "ephemeral" not in fake.responses[0][1]
 
 
+async def test_leave_clears_intentional_disconnect_when_update_voice_state_raises() -> None:
+    """#198: a failed /leave disconnect clears the intentional-disconnect marker.
+
+    The except branch in _handle_leave clears the marker then re-raises, so
+    a failed disconnect does not leave a stale
+    marker that would suppress a later genuine voice_lost broadcast. The
+    finally block still releases the explicit-leave guard on re-raise.
+    FakeBot.update_voice_state is a no-op by default, so this path is
+    unreachable without a raisable bot.
+    """
+    bot = both_in_voice()
+    ctx = context_for(bot)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=111)
+    player.is_connected = True
+    player.current = FakeAudioTrack(title="Now Playing")
+
+    bot.update_voice_state_exc = RuntimeError("voice-state update failed")
+
+    with pytest.raises(RuntimeError, match="voice-state update failed"):
+        await leave_module._handle_leave(ctx)
+
+    # The disconnect attempt was recorded before the raise.
+    assert bot.update_voice_state_calls == [(111, None)]
+    # #198 error-path: marker cleared by the except branch.
+    assert 111 not in lavalink_glue._pending_intentional_disconnects
+    # The finally block still released the explicit-leave guard on re-raise.
+    assert 111 not in lavalink_glue._explicit_leave_in_progress
+
+
 async def test_leave_calls_teardown_player_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
