@@ -81,6 +81,14 @@ _LABEL_LEAVE = t("controller.button.leave", locale="en_US")
 # :func:`_reset_state_for_test`.
 _controllers: dict[int, tuple[int, int]] = {}
 
+# Per-guild lock serializing :func:`_post_or_edit` callers so a second
+# caller arriving during another's ``create_message`` await re-reads
+# ``_controllers`` inside the lock and edits the first's freshly-posted
+# message instead of posting an untracked duplicate (issue #233). Per-key
+# lock pattern mirrors ``audio_cache._locks``; locks are intentionally
+# leaked (bytes are trivial vs. eviction bookkeeping).
+_locks: dict[int, asyncio.Lock] = {}
+
 
 def is_known_message(guild_id: int, message_id: int) -> bool:
     """Return True if ``message_id`` is the active controller for ``guild_id``.
@@ -345,38 +353,45 @@ async def _post_or_edit(
     is left in place and a fresh one is posted in the new channel — we
     don't try to delete the old one so the audit trail stays visible.
     The mapping is updated so subsequent edits target the new message.
-    """
-    record = _controllers.get(guild_id)
 
-    if record is not None and record[0] == channel_id:
-        prior_channel, message_id = record
+    Concurrent same-guild callers are serialized per guild via
+    :data:`_locks`; the full read-modify-write of :data:`_controllers`
+    runs inside ``async with lock``. See the :data:`_locks` comment for
+    the double-check mechanism (issue #233).
+    """
+    lock = _locks.setdefault(guild_id, asyncio.Lock())
+    async with lock:
+        record = _controllers.get(guild_id)
+
+        if record is not None and record[0] == channel_id:
+            prior_channel, message_id = record
+            try:
+                await bot.rest.edit_message(
+                    prior_channel, message_id, embed=embed, components=components
+                )
+                return
+            except hikari.NotFoundError:
+                # Message was deleted out from under us; fall through to repost.
+                _controllers.pop(guild_id, None)
+            except hikari.HikariError:
+                _log.exception(
+                    "guild=%d failed to edit now-playing controller %d/%d",
+                    guild_id,
+                    prior_channel,
+                    message_id,
+                )
+                return
+
         try:
-            await bot.rest.edit_message(
-                prior_channel, message_id, embed=embed, components=components
-            )
-            return
-        except hikari.NotFoundError:
-            # Message was deleted out from under us; fall through to repost.
-            _controllers.pop(guild_id, None)
+            message = await bot.rest.create_message(channel_id, embed=embed, components=components)
         except hikari.HikariError:
             _log.exception(
-                "guild=%d failed to edit now-playing controller %d/%d",
+                "guild=%d failed to post now-playing controller in channel %d",
                 guild_id,
-                prior_channel,
-                message_id,
+                channel_id,
             )
             return
-
-    try:
-        message = await bot.rest.create_message(channel_id, embed=embed, components=components)
-    except hikari.HikariError:
-        _log.exception(
-            "guild=%d failed to post now-playing controller in channel %d",
-            guild_id,
-            channel_id,
-        )
-        return
-    _controllers[guild_id] = (channel_id, int(message.id))
+        _controllers[guild_id] = (channel_id, int(message.id))
 
 
 async def teardown(bot: hikari.GatewayBot, guild_id: int) -> None:
@@ -411,3 +426,4 @@ async def teardown(bot: hikari.GatewayBot, guild_id: int) -> None:
 def _reset_state_for_test() -> None:
     """Test-only: clear all per-guild controller state."""
     _controllers.clear()
+    _locks.clear()
