@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.1](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.6.0...v0.6.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **i18n:** resolve dynamic FetchFailed site by AST identity, not line number ([#235](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/235)) ([8812a5d](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/8812a5dbf860ccc8a1948b8c592782c18595b684)), closes [#220](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/220)
+* **now_playing:** disable controller buttons while player is disconnected ([#229](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/229)) ([6c50a45](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/6c50a451e4dbdabaa8c39c4ef20759002b52a327))
+* **seek:** refresh now-playing controller after seek ([#232](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/232)) ([f730436](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/f73043654bebf0ed4cb672db8fed2fb39517a928))
+* **teardown:** unify /leave and auto-leave through _teardown_player_session ([#226](https://github.com/VeryLongOrgNameSuchWow/ryzic/issues/226)) ([2c6aaf7](https://github.com/VeryLongOrgNameSuchWow/ryzic/commit/2c6aaf7786ac26b206813db32b72b2115f2b6651))
+
 ## [0.6.0](https://github.com/VeryLongOrgNameSuchWow/ryzic/compare/v0.5.4...v0.6.0) (2026-06-23)
 
 
