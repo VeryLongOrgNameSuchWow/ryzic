@@ -437,9 +437,11 @@ def _friendly_error_key_candidates(tree: ast.AST) -> set[str]:
     ``FetchFailed(key)`` raise site by walking the ``_FRIENDLY_ERROR_KEYS``
     dict literal in ``tree``.
 
-    All values are string literals, so the candidate set is fully determined
-    at parse time — no allowlist entry needed. If this dict ever gains a
-    non-literal value, the gate fails and forces an explicit resolution path.
+    Pure AST walk so meta-tests can feed a synthetic ``ast.parse(snippet)``
+    in-memory (no temp files) and prove the resolver returns empty when the
+    dict literal is absent or non-string-valued — the signal the gate treats
+    as "no longer statically resolvable". Matches the module's stated rule
+    that gate logic lives in pure helpers.
     """
     for node in ast.walk(tree):
         target: ast.expr | None = None
@@ -557,6 +559,30 @@ def _check_fetchfailed_kwargs(
     return problems
 
 
+def _check_friendly_error_candidates(
+    catalog: Mapping[str, object], candidates: set[str], site_loc: str
+) -> list[str]:
+    """Check the dynamic ``FetchFailed(key)`` site's resolved candidates.
+
+    Empty candidates means ``_FRIENDLY_ERROR_KEYS`` could not be statically
+    resolved (dict literal missing or non-string-valued) — the site is no
+    longer statically resolvable. Each candidate must resolve to a catalog
+    key, mirroring the literal-key check. Factored out of the gate test so
+    meta-tests can feed a synthetic candidate set independent of real
+    ``ytdlp.py`` / the real catalog.
+    """
+    problems: list[str] = []
+    if not candidates:
+        problems.append(
+            f"{site_loc} — could not resolve _FRIENDLY_ERROR_KEYS "
+            "dict literal; the dynamic FetchFailed site is no longer statically resolvable"
+        )
+    for candidate in sorted(candidates):
+        if candidate not in catalog:
+            problems.append(f"{site_loc} candidate {candidate!r} — no such catalog key")
+    return problems
+
+
 def _check_no_duplicate_keys(raw_json: str) -> list[str]:
     try:
         json.loads(raw_json, object_pairs_hook=_reject_dups)
@@ -635,16 +661,7 @@ def test_every_fetchfailed_key_resolves_to_a_catalog_key() -> None:
     helper_sites = [s for s in all_sites if s is not matched_site]
     problems = _check_fetchfailed_keys(catalog, helper_sites, _DYNAMIC_FETCHFAILED_ALLOWLIST)
     candidates = _friendly_error_key_candidates(ytdlp_tree)
-    if not candidates:
-        problems.append(
-            f"{_site_loc(matched_site)} — could not resolve _FRIENDLY_ERROR_KEYS "
-            "dict literal; the dynamic FetchFailed site is no longer statically resolvable"
-        )
-    for candidate in sorted(candidates):
-        if candidate not in catalog:
-            problems.append(
-                f"{_site_loc(matched_site)} candidate {candidate!r} — no such catalog key"
-            )
+    problems += _check_friendly_error_candidates(catalog, candidates, _site_loc(matched_site))
     assert not problems, "FetchFailed key lint:\n  " + "\n  ".join(problems)
 
 
@@ -927,3 +944,98 @@ def test_meta_gate_rejects_filterless_friendly_error_genexp() -> None:
 def test_meta_gate_catches_duplicate_catalog_key() -> None:
     problems = _check_no_duplicate_keys('{"en_US": {"a": 1, "a": 2}}')
     assert problems and "a" in problems[0]
+
+
+def test_meta_gate_catches_missing_kwarg_fetchfailed() -> None:
+    """Check 6: a literal-keyed ``FetchFailed`` whose template has a
+    placeholder the raise site does not pass is flagged — parity with the
+    ``t()`` kwarg lint, but via ``_check_fetchfailed_kwargs``."""
+    catalog = {"k": "hello %{name}"}
+    site = _synthetic_site('FetchFailed("k")', kind="fetchfailed")
+    problems = _check_fetchfailed_kwargs(catalog, [site])
+    assert problems and "name" in problems[0]
+
+
+def test_meta_gate_accepts_extra_kwargs_fetchfailed() -> None:
+    """``_check_fetchfailed_kwargs`` only flags MISSING kwargs (it computes
+    ``expected - provided``, never ``provided - expected``). An extra kwarg
+    is silently accepted — pin that contract so a future "strict" regression
+    is caught."""
+    catalog = {"k": "hello %{name}"}
+    site = _synthetic_site('FetchFailed("k", name="v", extra="x")', kind="fetchfailed")
+    problems = _check_fetchfailed_kwargs(catalog, [site])
+    assert problems == []
+
+
+def test_meta_gate_skips_starstar_unpack_at_fetchfailed_raise_site() -> None:
+    """A ``FetchFailed("k", **vars)`` raise site spills names the gate can't
+    verify statically, so ``_check_fetchfailed_kwargs`` skips it (parity with
+    the ``t()`` lint). Pins the skip branch so a future "strict" regression
+    flagging ``**vars`` sites as missing their kwargs is caught. The
+    ``has_starstar_unpack`` assert surfaces a dropped ``**`` as a starstar
+    failure rather than a misleading non-empty problems list (the test would
+    still fail without it, but at ``assert problems == []`` instead)."""
+    catalog = {"k": "hello %{name}"}
+    site = _synthetic_site('FetchFailed("k", **vars)', kind="fetchfailed")
+    assert site.has_starstar_unpack
+    problems = _check_fetchfailed_kwargs(catalog, [site])
+    assert problems == []
+
+
+def test_meta_gate_catches_unresolvable_friendly_error_keys() -> None:
+    """When ``_FRIENDLY_ERROR_KEYS`` can't be found, the resolver returns
+    empty and the gate reports the dynamic site as no longer statically
+    resolvable — proved with a synthetic tree, independent of real ytdlp.py."""
+    candidates = _friendly_error_key_candidates(ast.parse("x = 1"))
+    assert candidates == set()
+    problems = _check_friendly_error_candidates(
+        {"ytdlp.error.real": "x"}, candidates, "ytdlp.py:<dynamic>"
+    )
+    assert problems and any("could not resolve" in p for p in problems)
+
+
+def test_meta_gate_catches_bogus_friendly_error_candidate() -> None:
+    """A resolved candidate that isn't a catalog key is flagged — covers the
+    plain ``Assign`` form of ``_FRIENDLY_ERROR_KEYS`` and the
+    candidate-not-in-catalog branch."""
+    candidates = _friendly_error_key_candidates(
+        ast.parse('_FRIENDLY_ERROR_KEYS = {"k": "ytdlp.error.bogus"}')
+    )
+    assert candidates == {"ytdlp.error.bogus"}
+    problems = _check_friendly_error_candidates(
+        {"ytdlp.error.real": "x"}, candidates, "ytdlp.py:<dynamic>"
+    )
+    assert problems and any("ytdlp.error.bogus" in p for p in problems)
+    assert any("no such catalog key" in p for p in problems)
+
+
+def test_meta_gate_catches_bogus_friendly_error_candidate_annassign() -> None:
+    """The ``AnnAssign`` form is the load-bearing branch for the real file
+    (``_FRIENDLY_ERROR_KEYS: Final[dict[str, str]] = {...}``). A regression
+    dropping it would leave candidates empty; this test fails to surface the
+    bogus-key problem if that branch breaks."""
+    candidates = _friendly_error_key_candidates(
+        ast.parse('_FRIENDLY_ERROR_KEYS: Final[dict[str, str]] = {"k": "ytdlp.error.bogus"}')
+    )
+    assert candidates == {"ytdlp.error.bogus"}
+    problems = _check_friendly_error_candidates(
+        {"ytdlp.error.real": "x"}, candidates, "ytdlp.py:<dynamic>"
+    )
+    assert problems and any("ytdlp.error.bogus" in p for p in problems)
+
+
+def test_meta_gate_drops_non_string_friendly_error_values() -> None:
+    """A ``_FRIENDLY_ERROR_KEYS`` dict whose values are non-string (a future
+    non-statically-resolvable key) yields empty candidates — the resolver
+    filters non-``Constant`` / non-``str`` values, so the gate reports the
+    dynamic site as unresolvable. Pins the non-string-valued half of the
+    resolver contract; a regression resolving ``ast.Name`` values to their
+    ``.id`` would leak a bogus candidate here instead of returning empty."""
+    candidates = _friendly_error_key_candidates(
+        ast.parse('_FRIENDLY_ERROR_KEYS = {"k": other_var}')
+    )
+    assert candidates == set()
+    problems = _check_friendly_error_candidates(
+        {"ytdlp.error.real": "x"}, candidates, "ytdlp.py:<dynamic>"
+    )
+    assert problems and any("could not resolve" in p for p in problems)
