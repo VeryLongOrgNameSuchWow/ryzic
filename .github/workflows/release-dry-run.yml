@@ -34,7 +34,7 @@ jobs:
       # QEMU so a Dockerfile change that breaks arm64 fails the dry-run
       # before tag-time. Cache feeds the second build below.
       - name: Build image (multi-arch, no push)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -47,7 +47,7 @@ jobs:
       # build, hence the split. This is a near-instant cache hit after the
       # multi-arch step above.
       - name: Build image (amd64, load for smoke-test)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           platforms: linux/amd64
