@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +15,7 @@ from ryzic.i18n import t
 from tests._command_helpers import (
     FakeAudioTrack,
     FakeLavalinkClient,
+    FakePlayer,
     install_lavalink_client,
     make_track_with_info,
 )
@@ -33,17 +35,31 @@ class _FakeRest:
         create_returns: int = 9000,
         edit_error: Exception | None = None,
         create_error: Exception | None = None,
+        edit_404_for: set[int] | None = None,
+        create_yields: bool = False,
     ) -> None:
         self.create_calls: list[dict[str, Any]] = []
         self.edit_calls: list[dict[str, Any]] = []
         self._next_id = create_returns
         self._edit_error = edit_error
         self._create_error = create_error
+        # Per-message-id 404s (vs. ``edit_error`` which 404s every edit) so
+        # the second colliding caller's edit of the first's freshly-posted
+        # message can still succeed. ``create_yields`` inserts an
+        # ``await asyncio.sleep(0)`` at the top of ``create_message`` so the
+        # first caller suspends inside the orphan window (after
+        # ``_post_or_edit``'s NotFoundError pop of ``_controllers``, before
+        # the write-back) and lets the second caller run — the determinism
+        # behind the #233 collision tests.
+        self._edit_404_for = edit_404_for
+        self._create_yields = create_yields
 
     async def create_message(self, channel_id: int, **kwargs: Any) -> _FakeMessage:
         self.create_calls.append({"channel_id": channel_id, **kwargs})
         if self._create_error is not None:
             raise self._create_error
+        if self._create_yields:
+            await asyncio.sleep(0)
         message_id = self._next_id
         self._next_id += 1
         return _FakeMessage(message_id)
@@ -52,6 +68,8 @@ class _FakeRest:
         self.edit_calls.append({"channel_id": channel_id, "message_id": message_id, **kwargs})
         if self._edit_error is not None:
             raise self._edit_error
+        if self._edit_404_for is not None and message_id in self._edit_404_for:
+            raise hikari.NotFoundError(url="x", headers={}, raw_body=b"")  # type: ignore[arg-type]
         return _FakeMessage(message_id)
 
 
@@ -59,6 +77,29 @@ def _bot_with_rest(rest: _FakeRest) -> hikari.GatewayBot:
     bot = MagicMock(spec=hikari.GatewayBot)
     bot.rest = rest
     return cast(hikari.GatewayBot, bot)
+
+
+def _make_connected_player(
+    rest: _FakeRest,
+    *,
+    guild_id: int = 111,
+    channel_id: int = 555,
+) -> tuple[hikari.GatewayBot, FakePlayer]:
+    """Build a bot + connected lavalink player holding a track, and wire
+    ``last_play_channel`` so ``upsert_for_track_start`` has a target channel.
+
+    Shared setup for the #233 collision/reset tests; per-test variation
+    (``edit_404_for``, a planted record, the target channel) stays in the
+    test body.
+    """
+    bot = _bot_with_rest(rest)
+    ll = FakeLavalinkClient()
+    install_lavalink_client(ll)
+    player = ll.player_manager.create(guild_id=guild_id)
+    player.is_connected = True
+    player.current = make_track_with_info()
+    lavalink_glue.last_play_channel[guild_id] = channel_id
+    return bot, player
 
 
 @pytest.fixture(autouse=True)
@@ -222,6 +263,91 @@ async def test_refresh_recovers_from_deleted_message_by_reposting() -> None:
 
     assert len(rest.create_calls) == 1
     assert now_playing.is_known_message(111, 9301)
+
+
+# ---------------------------------------------------------------------------
+# #233 — concurrent _post_or_edit collision (orphan-duplicate-controller)
+# ---------------------------------------------------------------------------
+#
+# Both colliding callers MUST be upsert_for_track_start — NOT refresh /
+# refresh_with_position. Those pre-check _controllers and short-circuit when
+# the record is None, and the first caller pops the record synchronously in
+# _post_or_edit's NotFoundError handler (edit_message 404s with no internal
+# await) before its first yield at create_message's sleep(0). A pre-checking
+# second caller therefore sees None and returns before reaching _post_or_edit
+# — it would never create, so a gather(refresh, refresh) collision produces 1
+# create on BOTH unfixed and fixed code (non-discriminating; passes on the
+# bug). upsert_for_track_start has no _controllers pre-check (it reads
+# last_play_channel), so the second upsert always reaches _post_or_edit's
+# _controllers read and observes the popped state — reproducing the orphan
+# pre-fix and exercising the lock's double-check post-fix.
+
+
+async def test_concurrent_post_or_edit_collision_creates_no_orphan() -> None:
+    """#233: two concurrent same-guild creators whose tracked message was
+    deleted must not both post new controllers.
+
+    Pre-fix: caller A pops the record in _post_or_edit's NotFoundError
+    handler and suspends at create_message's ``sleep(0)``; caller B reads
+    ``_controllers`` as None, falls through, and also creates. Both write
+    ``_controllers[111]``; one posted message is untracked (its buttons
+    later fail is_known_message → stale_session).
+    """
+    rest = _FakeRest(create_returns=9300, edit_404_for={9300}, create_yields=True)
+    bot, _player = _make_connected_player(rest, channel_id=555)
+    # Seed consumes 9300; _next_id is now 9301 (asserted below).
+    await now_playing.upsert_for_track_start(bot, 111)
+    rest.edit_calls.clear()
+    rest.create_calls.clear()
+
+    await asyncio.gather(
+        now_playing.upsert_for_track_start(bot, 111),
+        now_playing.upsert_for_track_start(bot, 111),
+    )
+
+    assert len(rest.create_calls) == 1  # pre-fix: 2 → FAILS
+    assert rest.create_calls[0]["channel_id"] == 555
+    assert now_playing._controllers[111] == (555, 9301)
+    assert now_playing.is_known_message(111, 9301)
+    assert len(now_playing._controllers) == 1
+    assert rest.edit_calls[-1]["message_id"] == 9301
+
+
+async def test_concurrent_post_or_edit_channel_mismatch_collision_creates_no_orphan() -> None:
+    """#233 (channel-mismatch branch): two concurrent callers targeting a
+    channel that differs from the recorded controller's channel must not
+    both create in the new channel.
+
+    The mismatch branch skips the edit WITHOUT popping (the recorded channel
+    != target channel), so the stale record stays present during the create
+    await — a second caller reads the stale record, also sees the mismatch,
+    and also creates. Pre-fix: two creates in channel 666, last writer wins,
+    the first's fresh message is orphaned with live buttons.
+
+    The old (555, 8000) controller becoming untracked is the intentional
+    audit-trail semantic documented in _post_or_edit's docstring (the prior
+    controller is left in place as history), NOT the #233 orphan; the orphan
+    this test pins is the duplicate in the new channel 666.
+    """
+    rest = _FakeRest(create_returns=9300, create_yields=True)
+    bot, _player = _make_connected_player(rest, channel_id=666)
+    # Plant a stale record in a DIFFERENT channel (555) with a distinct id so
+    # the mismatch branch (record's channel 555 != target 666) skips the edit
+    # and goes straight to create_message WITHOUT popping.
+    now_playing._controllers[111] = (555, 8000)
+    rest.edit_calls.clear()
+    rest.create_calls.clear()
+
+    await asyncio.gather(
+        now_playing.upsert_for_track_start(bot, 111),
+        now_playing.upsert_for_track_start(bot, 111),
+    )
+
+    assert len(rest.create_calls) == 1  # pre-fix: 2 → FAILS
+    assert rest.create_calls[0]["channel_id"] == 666
+    assert now_playing._controllers[111] == (666, 9300)
+    assert now_playing.is_known_message(111, 9300)
+    assert rest.edit_calls[-1]["message_id"] == 9300
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +770,34 @@ def test_is_known_message_false_for_unknown_guild() -> None:
 def test_is_known_message_false_for_different_message() -> None:
     now_playing._controllers[111] = (555, 12345)
     assert not now_playing.is_known_message(111, 99999)
+
+
+# ---------------------------------------------------------------------------
+# _reset_state_for_test — #233 lock dict hygiene
+# ---------------------------------------------------------------------------
+
+
+async def test_reset_state_for_test_clears_locks() -> None:
+    """#233: ``_reset_state_for_test`` must clear ``_locks`` alongside
+    ``_controllers`` so a lock object (and any held state) cannot leak
+    across tests and serialize unrelated same-guild callers.
+    """
+    rest = _FakeRest(create_returns=9100)
+    bot, _player = _make_connected_player(rest, channel_id=555)
+    await now_playing.upsert_for_track_start(bot, 111)
+
+    assert 111 in now_playing._locks
+    assert 111 in now_playing._controllers
+
+    now_playing._reset_state_for_test()
+
+    assert now_playing._locks == {}
+    assert now_playing._controllers == {}
+    # A fresh same-guild upsert after reset must not deadlock: the cleared
+    # lock is gone, so setdefault creates a brand-new, unheld Lock.
+    await now_playing.upsert_for_track_start(bot, 111)
+    assert 111 in now_playing._controllers
+    assert len(now_playing._controllers) == 1
 
 
 # ---------------------------------------------------------------------------
